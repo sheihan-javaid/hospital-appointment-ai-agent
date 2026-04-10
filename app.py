@@ -3,7 +3,7 @@ import streamlit as st
 import requests
 
 st.title("Hospital Appointment Booking Portal")
-base_url = st.text_input("Backend URL", "http://127.0.0.1:8000")
+base_url = st.text_input("Backend URL", "https://hospital-appointment-ai-agent.onrender.com")
 
 # Schedule appointment form
 
