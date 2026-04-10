@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException, Depends
 from sqlalchemy import select
 from typing import List
 import datetime as dt
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from database import init_db, Appointment, SessionLocal
 
@@ -26,6 +26,8 @@ class AppointmentRequest(BaseModel):
     start_time: dt.datetime
 
 class AppointmentResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     patient_name: str
     reason: str | None
@@ -54,7 +56,16 @@ def schedule_appointment(appointment: AppointmentRequest, db=Depends(get_db)):
     db.commit()
     db.refresh(new_appointment)
 
-    return new_appointment
+    new_appointment_return_obj = AppointmentResponse(
+        id=new_appointment.id,
+        patient_name=new_appointment.patient_name,
+        reason=new_appointment.reason,
+        start_time=new_appointment.start_time,
+        cancelled=new_appointment.cancelled,
+        created_at=new_appointment.created_at
+    )
+
+    return new_appointment_return_obj
 
 # Cancel
 @app.post("/cancel_appointment/", response_model=CancelAppointmentResponse)
