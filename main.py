@@ -96,6 +96,7 @@ def list_appointments(date: dt.date, db=Depends(get_db)):
         .where(Appointment.cancelled.is_(False))
         .where(Appointment.start_time >= start_dt)
         .where(Appointment.start_time <= end_dt)
+        .order_by(Appointment.start_time)
     )
 
     return results.scalars().all()
