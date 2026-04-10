@@ -54,7 +54,7 @@ list_date = st.date_input("Date to View", value=dt.date.today(), key="list_date"
 if st.button("Load Appointments"):
     try:
         resp = requests.get(
-            f"{base_url}/list_appointment/",
+            f"{base_url}/list_appointments/",
             params={"date": list_date.isoformat()},
             timeout=10,
         )
