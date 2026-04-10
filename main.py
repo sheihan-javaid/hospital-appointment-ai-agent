@@ -3,6 +3,8 @@ from fastapi import FastAPI, HTTPException, Depends
 from sqlalchemy import select
 import uvicorn
 from typing import List
+from main import app
+
 
 from database import init_db, Appointment, SessionLocal
 import datetime as dt
@@ -131,4 +133,4 @@ def list_appointments(date: dt.date, db=Depends(get_db)):
     return booked_appointments
 
 if __name__ == "__main__":
-    uvicorn.run("backend:app", host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
