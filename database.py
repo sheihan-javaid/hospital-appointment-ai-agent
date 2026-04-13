@@ -3,8 +3,7 @@ import datetime as dt
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, create_engine
 from sqlalchemy.types import TypeDecorator
 from sqlalchemy.dialects.sqlite import insert
-from sqlalchemy.orm import declarative_base, sessionmaker# main.py
-from database import  IST
+from sqlalchemy.orm import declarative_base, sessionmaker
 
 DATABASE_URL = "sqlite:///./appointments_db.db"
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
