@@ -3,7 +3,7 @@ from sqlalchemy import select
 from typing import List
 import datetime as dt
 import re
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 from database import init_db, Appointment, Doctor, get_db
 
@@ -18,7 +18,7 @@ app = FastAPI()
 
 
 # ---------------------------------------------------------------------------
-# Pydantic models
+# Models
 # ---------------------------------------------------------------------------
 
 class AppointmentRequest(BaseModel):
@@ -131,7 +131,9 @@ def parse_start_time(value: str | dt.datetime) -> dt.datetime:
         if parsed is None:
             rel = re.fullmatch(r"(today|tomorrow)(?:\s+at)?\s+(.+)", normalized)
             if rel:
-                base = dt.date.today() + (dt.timedelta(days=1) if rel.group(1) == "tomorrow" else dt.timedelta())
+                base = dt.date.today() + (
+                    dt.timedelta(days=1) if rel.group(1) == "tomorrow" else dt.timedelta()
+                )
                 try:
                     parsed = dt.datetime.combine(base, parse_time_component(rel.group(2)))
                 except ValueError as exc:
@@ -220,25 +222,16 @@ def list_appointments(date: str = "today", db=Depends(get_db)):
 
 @app.get("/check_doctor_availability/")
 def check_doctor_availability(
-    date: str | None = None,          # "today", "tomorrow", or "dd-mm-yyyy" — defaults to today
-    specialty: str | None = None,     # e.g. "dentist", "cardiologist"
-    speciality: str | None = None,    # alternate spelling accepted
-    doctor_name: str | None = None,   # filter by name
-    name: str | None = None,          # alternate param name accepted
+    date: str | None = None,
+    specialty: str | None = None,
+    speciality: str | None = None,
+    doctor_name: str | None = None,
+    name: str | None = None,
     db=Depends(get_db),
 ):
-    """
-    GET /check_doctor_availability/
-
-    All query parameters are optional. VAPI example calls:
-      /check_doctor_availability/
-      /check_doctor_availability/?date=today
-      /check_doctor_availability/?date=tomorrow&specialty=dentist
-      /check_doctor_availability/?doctor_name=Patel
-    """
-    resolved_date      = parse_request_date(date)           # None → today
+    resolved_date = parse_request_date(date)
     resolved_specialty = specialty or speciality
-    resolved_name      = doctor_name or name
+    resolved_name = doctor_name or name
 
     doctors_query = select(Doctor).where(Doctor.available.is_(True))
 
@@ -262,8 +255,6 @@ def check_doctor_availability(
         "available_doctors": names,
     }
 
-    # Convenience field when no filter is applied — agent can use this
-    # directly without parsing a list
     if not resolved_name and not resolved_specialty:
         response["any_available_doctor"] = names[0] if names else None
 
