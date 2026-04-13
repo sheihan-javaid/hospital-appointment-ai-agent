@@ -20,9 +20,9 @@ class Appointment(Base):
     id = Column(Integer, primary_key=True, index=True)
     patient_name = Column(String, index=True)
     reason = Column(String, index=True)
-    start_time = Column(DateTime(timezone=True), default=utcnow)   # ✅ callable
+    start_time = Column(DateTime(timezone=True), default=utcnow)   
     cancelled = Column(Boolean, default=False)
-    created_at = Column(DateTime(timezone=True), default=utcnow)   # ✅ callable
+    created_at = Column(DateTime(timezone=True), default=utcnow)  
 
 
 class Doctor(Base):
