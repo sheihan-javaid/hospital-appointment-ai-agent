@@ -47,6 +47,7 @@ class CancelAppointmentResponse(BaseModel):
 class CheckDoctorAvailabilityRequest(BaseModel):
     date: str | dt.date | None = None
     specialty: str | None = None
+    doctor_name: str | None = None
 
 
 def parse_request_date(value: str | dt.date | dt.datetime) -> dt.date:
@@ -253,6 +254,8 @@ def check_doctor_availability(request: CheckDoctorAvailabilityRequest, db=Depend
     end_dt = dt.datetime.combine(date, dt.time.max)
 
     doctors_query = select(Doctor).where(Doctor.available.is_(True))
+    if request.doctor_name:
+        doctors_query = doctors_query.where(Doctor.name.ilike(f"%{request.doctor_name.strip()}%"))
     if request.specialty:
         doctors_query = doctors_query.where(Doctor.specialty.ilike(f"%{request.specialty.strip()}%"))
 
@@ -275,4 +278,16 @@ def check_doctor_availability(request: CheckDoctorAvailabilityRequest, db=Depend
         if not has_appointment:
             available_doctors.append(doctor)
 
-    return {"available_doctors": [doctor.name for doctor in available_doctors]}
+    available_doctor_names = [doctor.name for doctor in available_doctors]
+
+    if not request.doctor_name and not request.specialty:
+        return {
+            "date": date.strftime("%d %m %Y"),
+            "any_available_doctor": available_doctor_names[0] if available_doctor_names else None,
+            "available_doctors": available_doctor_names,
+        }
+
+    return {
+        "date": date.strftime("%d %m %Y"),
+        "available_doctors": available_doctor_names,
+    }
