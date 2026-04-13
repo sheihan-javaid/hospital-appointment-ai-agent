@@ -45,7 +45,11 @@ class CancelAppointmentResponse(BaseModel):
 
 def normalize_specialty_filter(value: str) -> str:
     cleaned = value.strip().lower()
-    cleaned = re.sub(r"\b(dr|doctor|doctors|any|available|availability|show|check|find|finds|list|please|the|a|an|speciality|specialty)\b", " ", cleaned)
+    cleaned = re.sub(
+        r"\b(dr|doctor|doctors|any|available|availability|show|check|find|finds|list|please|the|a|an|today|tomorrow|tommorow|now|tonight|speciality|specialty)\b",
+        " ",
+        cleaned,
+    )
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned
 
