@@ -57,7 +57,7 @@ def parse_request_date(value: str | dt.date | dt.datetime) -> dt.date:
     if isinstance(value, dt.date):
         return value
 
-    normalized_value = value.strip().lower()
+    normalized_value = value.strip().lower().replace("tommorow", "tomorrow")
     today = dt.date.today()
 
     if normalized_value == "today":
@@ -246,9 +246,7 @@ def list_appointments(date: str, db=Depends(get_db)):
 
     return results.scalars().all()
 
-#check doctor availability
-@app.post("/check_doctor_availability/")
-def check_doctor_availability(request: CheckDoctorAvailabilityRequest, db=Depends(get_db)):
+def _build_doctor_availability_response(request: CheckDoctorAvailabilityRequest, db):
     date = parse_request_date(request.date or "today")
     start_dt = dt.datetime.combine(date, dt.time.min)
     end_dt = dt.datetime.combine(date, dt.time.max)
@@ -291,3 +289,24 @@ def check_doctor_availability(request: CheckDoctorAvailabilityRequest, db=Depend
         "date": date.strftime("%d %m %Y"),
         "available_doctors": available_doctor_names,
     }
+
+
+#check doctor availability
+@app.post("/check_doctor_availability/")
+def check_doctor_availability(request: CheckDoctorAvailabilityRequest, db=Depends(get_db)):
+    return _build_doctor_availability_response(request, db)
+
+
+@app.get("/check_doctor_availability/")
+def check_doctor_availability_get(
+    date: str | None = None,
+    specialty: str | None = None,
+    doctor_name: str | None = None,
+    db=Depends(get_db),
+):
+    request = CheckDoctorAvailabilityRequest(
+        date=date,
+        specialty=specialty,
+        doctor_name=doctor_name,
+    )
+    return _build_doctor_availability_response(request, db)
