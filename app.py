@@ -58,8 +58,8 @@ st.subheader("List Appointments")
 
 list_date = st.text_input(
     "Date to View",
-    value=dt.date.today().strftime("%d-%m-%Y"),         # fixed: hyphens
-    help="Use today, tomorrow, or dd-mm-yyyy like 13-04-2026",  # fixed
+    value=dt.date.today().strftime("%d-%m-%Y"),         
+    help="Use today, tomorrow, or dd-mm-yyyy like 13-04-2026",  
     key="list_date",
 )
 
