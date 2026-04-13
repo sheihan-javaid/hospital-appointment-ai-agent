@@ -4,8 +4,7 @@ from typing import List
 import datetime as dt
 import re
 from pydantic import BaseModel, ConfigDict
-
-from database import init_db, Appointment, Doctor, get_db
+from database import init_db, Appointment, Doctor, get_db, IST
 
 DATE_INPUT_FORMAT = "%d-%m-%Y"
 START_TIME_ERROR_DETAIL = (
@@ -153,13 +152,13 @@ def parse_start_time(value: str | dt.datetime) -> dt.datetime:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=IST)
 
-    return parsed.astimezone(dt.timezone.utc)
+    return parsed.astimezone(IST)
 
 @app.post("/schedule_appointment/", response_model=AppointmentResponse)
 def schedule_appointment(appointment: AppointmentRequest, db=Depends(get_db)):
     start_time = parse_start_time(appointment.start_time)
 
-    if start_time.astimezone(IST) < dt.datetime.now(IST):
+    if start_time < dt.datetime.now(IST):
         raise HTTPException(status_code=400, detail="Start time must be later than current time")
 
     new_appointment = Appointment(
@@ -176,8 +175,8 @@ def schedule_appointment(appointment: AppointmentRequest, db=Depends(get_db)):
 @app.post("/cancel_appointment/", response_model=CancelAppointmentResponse)
 def cancel_appointment(request: CancelAppointmentRequest, db=Depends(get_db)):
     request_date = parse_request_date(request.date)
-    start_dt = dt.datetime.combine(request_date, dt.time.min)
-    end_dt = dt.datetime.combine(request_date, dt.time.max)
+    start_dt = dt.datetime.combine(request_date, dt.time.min, tzinfo=IST)
+    end_dt = dt.datetime.combine(request_date, dt.time.max, tzinfo=IST)
 
     appointments = db.execute(
         select(Appointment)
@@ -200,8 +199,8 @@ def cancel_appointment(request: CancelAppointmentRequest, db=Depends(get_db)):
 @app.get("/list_appointments/", response_model=List[AppointmentResponse])
 def list_appointments(date: str = "today", db=Depends(get_db)):
     request_date = parse_request_date(date)
-    start_dt = dt.datetime.combine(request_date, dt.time.min)
-    end_dt = dt.datetime.combine(request_date, dt.time.max)
+    start_dt = dt.datetime.combine(request_date, dt.time.min, tzinfo=IST)
+    end_dt = dt.datetime.combine(request_date, dt.time.max, tzinfo=IST)
 
     return db.execute(
         select(Appointment)
