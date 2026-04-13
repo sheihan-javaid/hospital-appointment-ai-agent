@@ -2,6 +2,8 @@ import datetime as dt
 import streamlit as st
 import requests
 
+REQUEST_TIMEOUT = 30
+
 st.title("Hospital Appointment Booking Portal")
 base_url = st.text_input("Backend URL", "https://hospital-appointment-ai-agent.onrender.com")
 
@@ -20,7 +22,7 @@ if st.button("Schedule Appointment"):
         "start_time": start_dt.isoformat()  
     }
     try:
-        resp = requests.post(f"{base_url}/schedule_appointment/", json=payload, timeout=10)
+        resp = requests.post(f"{base_url}/schedule_appointment/", json=payload, timeout=REQUEST_TIMEOUT)
         resp.raise_for_status()
         data = resp.json()
         st.success(f"Scheduled appointment #{data['id']} for {data['patient_name']}")
@@ -44,7 +46,7 @@ if st.button("Cancel Appointment"):
         "date": cancel_date,
     }
     try:
-        resp = requests.post(f"{base_url}/cancel_appointment/", json=cancel_payload, timeout=10)
+        resp = requests.post(f"{base_url}/cancel_appointment/", json=cancel_payload, timeout=REQUEST_TIMEOUT)
         resp.raise_for_status()
         data = resp.json()
         st.success(data.get("message", "Appointment cancelled."))
@@ -66,7 +68,7 @@ if st.button("Load Appointments"):
         resp = requests.get(
             f"{base_url}/list_appointments/",
             params={"date": list_date},
-            timeout=10,
+            timeout=REQUEST_TIMEOUT,
         )
         resp.raise_for_status()
         appointments = resp.json()

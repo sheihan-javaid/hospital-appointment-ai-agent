@@ -45,7 +45,8 @@ class CancelAppointmentResponse(BaseModel):
     message: str
 
 class CheckDoctorAvailabilityRequest(BaseModel):
-    date: str | dt.date
+    date: str | dt.date | None = None
+    specialty: str | None = None
 
 
 def parse_request_date(value: str | dt.date | dt.datetime) -> dt.date:
@@ -247,12 +248,15 @@ def list_appointments(date: str, db=Depends(get_db)):
 #check doctor availability
 @app.post("/check_doctor_availability/")
 def check_doctor_availability(request: CheckDoctorAvailabilityRequest, db=Depends(get_db)):
-    date = parse_request_date(request.date)
+    date = parse_request_date(request.date or "today")
     start_dt = dt.datetime.combine(date, dt.time.min)
     end_dt = dt.datetime.combine(date, dt.time.max)
 
-    # Get all doctors
-    doctors = db.execute(select(Doctor)).scalars().all()
+    doctors_query = select(Doctor).where(Doctor.available.is_(True))
+    if request.specialty:
+        doctors_query = doctors_query.where(Doctor.specialty.ilike(f"%{request.specialty.strip()}%"))
+
+    doctors = db.execute(doctors_query).scalars().all()
 
     # Get all appointments for the date
     appointments = db.execute(
@@ -265,11 +269,10 @@ def check_doctor_availability(request: CheckDoctorAvailabilityRequest, db=Depend
     # For simplicity, assume each doctor can only have one appointment per day
     available_doctors = []
     for doctor in doctors:
-        if doctor.available:
-            has_appointment = any(
-                appt for appt in appointments if appt.reason == doctor.specialty
-            )
-            if not has_appointment:
-                available_doctors.append(doctor)
+        has_appointment = any(
+            appt for appt in appointments if appt.reason == doctor.specialty
+        )
+        if not has_appointment:
+            available_doctors.append(doctor)
 
     return {"available_doctors": [doctor.name for doctor in available_doctors]}
