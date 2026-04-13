@@ -16,11 +16,6 @@ START_TIME_ERROR_DETAIL = (
 init_db()
 app = FastAPI()
 
-
-# ---------------------------------------------------------------------------
-# Models
-# ---------------------------------------------------------------------------
-
 class AppointmentRequest(BaseModel):
     patient_name: str
     reason: str
@@ -47,10 +42,6 @@ class CancelAppointmentResponse(BaseModel):
     success: bool
     message: str
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 def normalize_specialty_filter(value: str) -> str:
     cleaned = value.strip().lower()
@@ -158,11 +149,6 @@ def parse_start_time(value: str | dt.datetime) -> dt.datetime:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=dt.timezone.utc)
     return parsed.astimezone(dt.timezone.utc)
-
-
-# ---------------------------------------------------------------------------
-# Routes
-# ---------------------------------------------------------------------------
 
 @app.post("/schedule_appointment/", response_model=AppointmentResponse)
 def schedule_appointment(appointment: AppointmentRequest, db=Depends(get_db)):
