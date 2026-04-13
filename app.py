@@ -31,12 +31,17 @@ st.divider()
 st.subheader("Cancel Appointments")
 
 cancel_name = st.text_input("Patient Name to Cancel", key="cancel_patient_name")
-cancel_date = st.date_input("Date to Cancel", value=dt.date.today(), key="cancel_date")
+cancel_date = st.text_input(
+    "Date to Cancel",
+    value=dt.date.today().strftime("%d %m %Y"),
+    help="Use today, tomorrow, or dd mm yyyy like 13 04 2026",
+    key="cancel_date",
+)
 
 if st.button("Cancel Appointment"):
     cancel_payload = {
         "patient_name": cancel_name,
-        "date": cancel_date.isoformat(),
+        "date": cancel_date,
     }
     try:
         resp = requests.post(f"{base_url}/cancel_appointment/", json=cancel_payload, timeout=10)
@@ -49,13 +54,18 @@ if st.button("Cancel Appointment"):
 st.divider()
 st.subheader("List Appointments")
 
-list_date = st.date_input("Date to View", value=dt.date.today(), key="list_date")
+list_date = st.text_input(
+    "Date to View",
+    value=dt.date.today().strftime("%d %m %Y"),
+    help="Use today, tomorrow, or dd mm yyyy like 13 04 2026",
+    key="list_date",
+)
 
 if st.button("Load Appointments"):
     try:
         resp = requests.get(
             f"{base_url}/list_appointments/",
-            params={"date": list_date.isoformat()},
+            params={"date": list_date},
             timeout=10,
         )
         resp.raise_for_status()
