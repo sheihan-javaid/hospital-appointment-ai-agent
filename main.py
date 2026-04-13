@@ -42,7 +42,6 @@ class CancelAppointmentResponse(BaseModel):
     success: bool
     message: str
 
-
 def normalize_specialty_filter(value: str) -> str:
     cleaned = value.strip().lower()
     cleaned = re.sub(
@@ -238,14 +237,17 @@ def check_doctor_availability(
             )
 
     doctors = db.execute(doctors_query).scalars().all()
-    names = [d.name for d in doctors]
+
+    available_doctors = [
+        {"name": d.name, "specialty": d.specialty} for d in doctors
+    ]
 
     response = {
         "date": resolved_date.strftime(DATE_INPUT_FORMAT),
-        "available_doctors": names,
+        "available_doctors": available_doctors,
     }
 
     if not resolved_name and not resolved_specialty:
-        response["any_available_doctor"] = names[0] if names else None
+        response["any_available_doctor"] = available_doctors[0] if available_doctors else None
 
     return response
