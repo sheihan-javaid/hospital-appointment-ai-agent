@@ -3,22 +3,20 @@ from sqlalchemy import select
 from typing import List
 import datetime as dt
 import re
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
-from database import init_db, Appointment, Doctor, SessionLocal
+from database import init_db, Appointment, Doctor, get_db
+
+DATE_INPUT_FORMAT = "%d-%m-%Y"
+START_TIME_ERROR_DETAIL = (
+    "Invalid start_time. Use ISO datetime, 'today/tomorrow at time', "
+    "or 'dd-mm-yyyy HH:MM' (optionally with am/pm)."
+)
 
 # Initialize DB
 init_db()
 
 app = FastAPI()
-
-# Dependency
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 # Models
 class AppointmentRequest(BaseModel):
@@ -45,9 +43,18 @@ class CancelAppointmentResponse(BaseModel):
     message: str
 
 class CheckDoctorAvailabilityRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     date: str | dt.date | None = None
-    specialty: str | None = None
-    doctor_name: str | None = None
+    specialty: str | None = Field(default=None, alias="speciality")
+    doctor_name: str | None = Field(default=None, alias="name")
+
+
+def normalize_specialty_filter(value: str) -> str:
+    cleaned = value.strip().lower()
+    cleaned = re.sub(r"\b(dr|doctor|doctors|speciality|specialty)\b", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
 
 
 def parse_request_date(value: str | dt.date | dt.datetime) -> dt.date:
@@ -67,11 +74,11 @@ def parse_request_date(value: str | dt.date | dt.datetime) -> dt.date:
         return today + dt.timedelta(days=1)
 
     try:
-        return dt.datetime.strptime(normalized_value, "%d %m %Y").date()
+        return dt.datetime.strptime(normalized_value, DATE_INPUT_FORMAT).date()
     except ValueError as exc:
         raise HTTPException(
             status_code=422,
-            detail="Date must be 'today', 'tomorrow', or in dd mm yyyy format like 13 04 2026",
+            detail="Date must be 'today', 'tomorrow', or in dd-mm-yyyy format like 13-04-2026",
         ) from exc
 
 
@@ -135,31 +142,29 @@ def parse_start_time(value: str | dt.datetime) -> dt.datetime:
                 parsed = dt.datetime.combine(base_date, parsed_time)
 
         if parsed is None:
-            parts = normalized.split(" ")
-            if len(parts) >= 3 and all(part.isdigit() for part in parts[:3]):
-                date_text = " ".join(parts[:3])
-                time_text = " ".join(parts[3:]) if len(parts) > 3 else "09:00"
+            # ✅ FIX: Updated to parse dd-mm-yyyy date format (dash-separated)
+            # Matches: "13-04-2026 14:30" or "13-04-2026 2pm" etc.
+            date_time_match = re.fullmatch(
+                r"(\d{2}-\d{2}-\d{4})(?:\s+(.+))?", normalized
+            )
+            if date_time_match:
+                date_text = date_time_match.group(1)
+                time_text = date_time_match.group(2) or "09:00"
 
                 try:
-                    parsed_date = dt.datetime.strptime(date_text, "%d %m %Y").date()
+                    parsed_date = dt.datetime.strptime(date_text, "%d-%m-%Y").date()
                     parsed_time = parse_time_component(time_text)
                     parsed = dt.datetime.combine(parsed_date, parsed_time)
                 except ValueError as exc:
                     raise HTTPException(
                         status_code=422,
-                        detail=(
-                            "Invalid start_time. Use ISO datetime, 'today/tomorrow at time', "
-                            "or 'dd mm yyyy HH:MM' (optionally with am/pm)."
-                        ),
+                        detail=START_TIME_ERROR_DETAIL,
                     ) from exc
 
         if parsed is None:
             raise HTTPException(
                 status_code=422,
-                detail=(
-                    "Invalid start_time. Use ISO datetime, 'today/tomorrow at time', "
-                    "or 'dd mm yyyy HH:MM' (optionally with am/pm)."
-                ),
+                detail=START_TIME_ERROR_DETAIL,
             )
 
     if parsed.tzinfo is None:
@@ -176,7 +181,6 @@ def schedule_appointment(appointment: AppointmentRequest, db=Depends(get_db)):
 
     if start_time < now:
         raise HTTPException(status_code=400, detail="Start time must be later than current time")
-    
 
     new_appointment = Appointment(
         patient_name=appointment.patient_name,
@@ -188,16 +192,7 @@ def schedule_appointment(appointment: AppointmentRequest, db=Depends(get_db)):
     db.commit()
     db.refresh(new_appointment)
 
-    new_appointment_return_obj = AppointmentResponse(
-        id=new_appointment.id,
-        patient_name=new_appointment.patient_name,
-        reason=new_appointment.reason,
-        start_time=new_appointment.start_time,
-        cancelled=new_appointment.cancelled,
-        created_at=new_appointment.created_at
-    )
-
-    return new_appointment_return_obj
+    return new_appointment
 
 # Cancel
 @app.post("/cancel_appointment/", response_model=CancelAppointmentResponse)
@@ -248,50 +243,41 @@ def list_appointments(date: str, db=Depends(get_db)):
 
 def _build_doctor_availability_response(request: CheckDoctorAvailabilityRequest, db):
     date = parse_request_date(request.date or "today")
-    start_dt = dt.datetime.combine(date, dt.time.min)
-    end_dt = dt.datetime.combine(date, dt.time.max)
 
+    # Build query for available doctors, optionally filtered by name and/or specialty
     doctors_query = select(Doctor).where(Doctor.available.is_(True))
+
     if request.doctor_name:
-        doctors_query = doctors_query.where(Doctor.name.ilike(f"%{request.doctor_name.strip()}%"))
+        doctor_name_filter = request.doctor_name.strip()
+        doctors_query = doctors_query.where(Doctor.name.ilike(f"%{doctor_name_filter}%"))
+
     if request.specialty:
-        doctors_query = doctors_query.where(Doctor.specialty.ilike(f"%{request.specialty.strip()}%"))
+        specialty_filter = normalize_specialty_filter(request.specialty)
+        if specialty_filter:
+            doctors_query = doctors_query.where(Doctor.specialty.ilike(f"%{specialty_filter}%"))
 
+    # ✅ FIX: Removed the broken appointment-conflict check that compared
+    # appt.reason == doctor.specialty (an unreliable heuristic with no
+    # doctor_id on Appointment).  The Doctor.available flag is the source
+    # of truth for availability; all doctors passing the query above are
+    # considered available on the requested date.
     doctors = db.execute(doctors_query).scalars().all()
-
-    # Get all appointments for the date
-    appointments = db.execute(
-        select(Appointment)
-        .where(Appointment.cancelled.is_(False))
-        .where(Appointment.start_time >= start_dt)
-        .where(Appointment.start_time <= end_dt)
-    ).scalars().all()
-
-    # For simplicity, assume each doctor can only have one appointment per day
-    available_doctors = []
-    for doctor in doctors:
-        has_appointment = any(
-            appt for appt in appointments if appt.reason == doctor.specialty
-        )
-        if not has_appointment:
-            available_doctors.append(doctor)
-
-    available_doctor_names = [doctor.name for doctor in available_doctors]
+    available_doctor_names = [doctor.name for doctor in doctors]
 
     if not request.doctor_name and not request.specialty:
         return {
-            "date": date.strftime("%d %m %Y"),
+            "date": date.strftime(DATE_INPUT_FORMAT),
             "any_available_doctor": available_doctor_names[0] if available_doctor_names else None,
             "available_doctors": available_doctor_names,
         }
 
     return {
-        "date": date.strftime("%d %m %Y"),
+        "date": date.strftime(DATE_INPUT_FORMAT),
         "available_doctors": available_doctor_names,
     }
 
 
-#check doctor availability
+# Check doctor availability
 @app.post("/check_doctor_availability/")
 def check_doctor_availability(request: CheckDoctorAvailabilityRequest, db=Depends(get_db)):
     return _build_doctor_availability_response(request, db)
@@ -301,12 +287,17 @@ def check_doctor_availability(request: CheckDoctorAvailabilityRequest, db=Depend
 def check_doctor_availability_get(
     date: str | None = None,
     specialty: str | None = None,
+    speciality: str | None = None,
     doctor_name: str | None = None,
+    name: str | None = None,
     db=Depends(get_db),
 ):
+    resolved_specialty = specialty or speciality
+    resolved_doctor_name = doctor_name or name
+
     request = CheckDoctorAvailabilityRequest(
         date=date,
-        specialty=specialty,
-        doctor_name=doctor_name,
+        specialty=resolved_specialty,
+        doctor_name=resolved_doctor_name,
     )
     return _build_doctor_availability_response(request, db)
