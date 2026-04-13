@@ -23,7 +23,12 @@ class AppointmentRequest(BaseModel):
 
 
 class AppointmentResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_encoders={
+            dt.datetime: lambda v: v.astimezone(IST).strftime("%Y-%m-%d at %H:%M:%S")
+        },
+    )
 
     id: int
     patient_name: str
