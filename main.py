@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, Depends
 from sqlalchemy import select
 from typing import List
 import datetime as dt
+import re
 from pydantic import BaseModel, ConfigDict
 
 from database import init_db, Appointment, Doctor, SessionLocal
@@ -23,7 +24,7 @@ def get_db():
 class AppointmentRequest(BaseModel):
     patient_name: str
     reason: str
-    start_time: dt.datetime
+    start_time: str | dt.datetime
 
 class AppointmentResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -72,14 +73,104 @@ def parse_request_date(value: str | dt.date | dt.datetime) -> dt.date:
         ) from exc
 
 
+def parse_time_component(value: str) -> dt.time:
+    normalized = value.strip().lower().replace(".", "")
+    normalized = re.sub(r"\s+", " ", normalized)
+
+    am_pm_match = re.fullmatch(r"(\d{1,2})(?::(\d{2}))?\s*([ap]m)", normalized)
+    if am_pm_match:
+        hour = int(am_pm_match.group(1))
+        minute = int(am_pm_match.group(2) or 0)
+        meridiem = am_pm_match.group(3)
+
+        if hour < 1 or hour > 12 or minute < 0 or minute > 59:
+            raise ValueError("Invalid 12-hour time")
+
+        if meridiem == "pm" and hour != 12:
+            hour += 12
+        if meridiem == "am" and hour == 12:
+            hour = 0
+        return dt.time(hour=hour, minute=minute)
+
+    for fmt in ("%H:%M", "%H"):
+        try:
+            return dt.datetime.strptime(normalized, fmt).time()
+        except ValueError:
+            continue
+
+    raise ValueError("Unsupported time format")
+
+
+def parse_start_time(value: str | dt.datetime) -> dt.datetime:
+    if isinstance(value, dt.datetime):
+        parsed = value
+    else:
+        raw = value.strip()
+        normalized = re.sub(r"\s+", " ", raw.lower())
+        normalized = normalized.replace("tommorow", "tomorrow")
+
+        # Accept ISO datetime payloads first.
+        try:
+            parsed = dt.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            parsed = None
+
+        if parsed is None:
+            relative_match = re.fullmatch(r"(today|tomorrow)(?:\s+at)?\s+(.+)", normalized)
+            if relative_match:
+                base_date = dt.date.today()
+                if relative_match.group(1) == "tomorrow":
+                    base_date += dt.timedelta(days=1)
+
+                try:
+                    parsed_time = parse_time_component(relative_match.group(2))
+                except ValueError as exc:
+                    raise HTTPException(
+                        status_code=422,
+                        detail="Invalid time format. Try values like '2 pm', '2:30 pm', or '14:30'.",
+                    ) from exc
+
+                parsed = dt.datetime.combine(base_date, parsed_time)
+
+        if parsed is None:
+            parts = normalized.split(" ")
+            if len(parts) >= 3 and all(part.isdigit() for part in parts[:3]):
+                date_text = " ".join(parts[:3])
+                time_text = " ".join(parts[3:]) if len(parts) > 3 else "09:00"
+
+                try:
+                    parsed_date = dt.datetime.strptime(date_text, "%d %m %Y").date()
+                    parsed_time = parse_time_component(time_text)
+                    parsed = dt.datetime.combine(parsed_date, parsed_time)
+                except ValueError as exc:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            "Invalid start_time. Use ISO datetime, 'today/tomorrow at time', "
+                            "or 'dd mm yyyy HH:MM' (optionally with am/pm)."
+                        ),
+                    ) from exc
+
+        if parsed is None:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Invalid start_time. Use ISO datetime, 'today/tomorrow at time', "
+                    "or 'dd mm yyyy HH:MM' (optionally with am/pm)."
+                ),
+            )
+
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=dt.timezone.utc)
+
+    return parsed.astimezone(dt.timezone.utc)
+
+
 # Schedule
 @app.post("/schedule_appointment/", response_model=AppointmentResponse)
 def schedule_appointment(appointment: AppointmentRequest, db=Depends(get_db)):
     now = dt.datetime.now(dt.timezone.utc)
-
-    start_time = appointment.start_time
-    if start_time.tzinfo is None:
-        start_time = start_time.replace(tzinfo=dt.timezone.utc)
+    start_time = parse_start_time(appointment.start_time)
 
     if start_time < now:
         raise HTTPException(status_code=400, detail="Start time must be later than current time")
