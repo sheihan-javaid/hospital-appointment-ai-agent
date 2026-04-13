@@ -13,6 +13,7 @@ START_TIME_ERROR_DETAIL = (
     "or 'dd-mm-yyyy HH:MM' (optionally with am/pm)."
 )
 
+IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
 init_db()
 app = FastAPI()
 
@@ -55,7 +56,7 @@ def normalize_specialty_filter(value: str) -> str:
 
 def parse_request_date(value: str | dt.date | dt.datetime | None) -> dt.date:
     if value is None:
-        return dt.date.today()
+        return dt.datetime.now(IST).date()
 
     if isinstance(value, dt.datetime):
         return value.date()
@@ -64,7 +65,7 @@ def parse_request_date(value: str | dt.date | dt.datetime | None) -> dt.date:
         return value
 
     normalized = value.strip().lower().replace("tommorow", "tomorrow")
-    today = dt.date.today()
+    today = dt.datetime.now(IST).date()
 
     if normalized == "today":
         return today
@@ -125,7 +126,7 @@ def parse_start_time(value: str | dt.datetime) -> dt.datetime:
         if parsed is None:
             rel = re.fullmatch(r"(today|tomorrow)(?:\s+at)?\s+(.+)", normalized)
             if rel:
-                base = dt.date.today() + (
+                base = dt.datetime.now(IST).date() + (
                     dt.timedelta(days=1) if rel.group(1) == "tomorrow" else dt.timedelta()
                 )
                 try:
@@ -150,7 +151,8 @@ def parse_start_time(value: str | dt.datetime) -> dt.datetime:
             raise HTTPException(status_code=422, detail=START_TIME_ERROR_DETAIL)
 
     if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=dt.timezone.utc)
+        parsed = parsed.replace(tzinfo=IST)
+
     return parsed.astimezone(dt.timezone.utc)
 
 @app.post("/schedule_appointment/", response_model=AppointmentResponse)
