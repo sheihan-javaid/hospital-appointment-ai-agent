@@ -4,7 +4,7 @@ from typing import List
 import datetime as dt
 import re
 from pydantic import BaseModel, ConfigDict
-from database import init_db, Appointment, Doctor, get_db, IST
+from database import init_db, Appointment, Doctor, get_db, IST, ist_now
 
 DATE_INPUT_FORMAT = "%d-%m-%Y"
 START_TIME_ERROR_DETAIL = (
@@ -161,7 +161,7 @@ def parse_start_time(value: str | dt.datetime) -> dt.datetime:
 
 @app.post("/schedule_appointment/", response_model=AppointmentResponse)
 def schedule_appointment(appointment: AppointmentRequest, db=Depends(get_db)):
-    start_time = parse_start_time(appointment.start_time)
+    start_time = parse_start_time(appointment.start_time).astimezone(IST)
 
     if start_time < dt.datetime.now(IST):
         raise HTTPException(status_code=400, detail="Start time must be later than current time")
@@ -170,6 +170,7 @@ def schedule_appointment(appointment: AppointmentRequest, db=Depends(get_db)):
         patient_name=appointment.patient_name,
         reason=appointment.reason,
         start_time=start_time,
+        created_at=ist_now(),
     )
     db.add(new_appointment)
     db.commit()

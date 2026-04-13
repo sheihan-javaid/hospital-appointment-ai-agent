@@ -60,7 +60,7 @@ class Doctor(Base):
     available = Column(Boolean, default=True, nullable=False)
 
 
-_DEFAULT_DOCTORS = [
+Doctor_name = [
     {"name": "Dr. Sarah Khan",     "specialty": "Cardiology",      "available": True},
     {"name": "Dr. Michael Lee",    "specialty": "Neurology",        "available": True},
     {"name": "Dr. Aisha Rahman",   "specialty": "Pediatrics",       "available": True},
@@ -78,7 +78,7 @@ def _seed_default_doctors() -> None:
     with engine.begin() as conn:
         conn.execute(
             insert(Doctor).prefix_with("OR IGNORE"),
-            _DEFAULT_DOCTORS,
+            Doctor_name,
         )
 
 
