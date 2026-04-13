@@ -158,7 +158,8 @@ def parse_start_time(value: str | dt.datetime) -> dt.datetime:
 @app.post("/schedule_appointment/", response_model=AppointmentResponse)
 def schedule_appointment(appointment: AppointmentRequest, db=Depends(get_db)):
     start_time = parse_start_time(appointment.start_time)
-    if start_time < dt.datetime.now(dt.timezone.utc):
+
+    if start_time.astimezone(IST) < dt.datetime.now(IST):
         raise HTTPException(status_code=400, detail="Start time must be later than current time")
 
     new_appointment = Appointment(
