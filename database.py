@@ -11,6 +11,7 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
+UTC = dt.timezone.utc
 
 
 def ist_now() -> dt.datetime:
@@ -18,14 +19,24 @@ def ist_now() -> dt.datetime:
 
 
 class ISTDateTime(TypeDecorator):
-    impl = DateTime(timezone=True)
+    impl = DateTime
     cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        # If value is timezone-aware, convert to UTC then drop tzinfo for storage
+        if value.tzinfo is not None:
+            return value.astimezone(UTC).replace(tzinfo=None)
+        # If naive, assume it's in IST (app may provide ist_now()), convert to UTC-naive
+        return value.replace(tzinfo=IST).astimezone(UTC).replace(tzinfo=None)
 
     def process_result_value(self, value, dialect):
         if value is None:
             return None
+        # Stored values are UTC-naive: attach UTC tzinfo then convert to IST
         if value.tzinfo is None:
-            return value.replace(tzinfo=IST)
+            return value.replace(tzinfo=UTC).astimezone(IST)
         return value.astimezone(IST)
 
 
