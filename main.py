@@ -1,48 +1,81 @@
 from fastapi import FastAPI, HTTPException, Depends
+from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
 import datetime as dt
 import re
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+import logging
+import os
+
+from pydantic import BaseModel, ConfigDict
 from zoneinfo import ZoneInfo
-from database import init_db, get_db, kolkata_now, to_utc_naive, KOLKATA
 
-# Constants
+from database import init_db, get_db, to_utc_naive
+
+
+# ---- Configuration ----
 DATE_INPUT_FORMAT = "%d-%m-%Y"
-TIME_INPUT_FORMAT = "%H:%M"
-MIN_ADVANCE_MINUTES = 15
-MAX_FUTURE_DAYS = 90  # Allow appointments up to 90 days in future
-
-START_TIME_ERROR_DETAIL = (
-    "Invalid start_time. Use ISO datetime, 'today/tomorrow at time', "
-    f"or 'dd-mm-yyyy HH:MM' (optionally with am/pm). Times must be at least {MIN_ADVANCE_MINUTES} minutes in future "
-    f"and within {MAX_FUTURE_DAYS} days."
-)
-
 UTC = dt.timezone.utc
-
-# Initialize database
-init_db()
-app = FastAPI(title="Appointment Scheduler API")
+MIN_ADVANCE_MINUTES = int(os.environ.get("MIN_ADVANCE_MINUTES", "15"))
+MAX_FUTURE_DAYS = int(os.environ.get("MAX_FUTURE_DAYS", "365"))
 
 
-# Pydantic Models
+# ---- Logging ----
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("main")
+
+
+# ---- Timezone helpers ----
+def _get_kolkata_tz() -> dt.tzinfo:
+    """Return a tzinfo for Asia/Kolkata, fallback to fixed offset if ZoneInfo unavailable."""
+    try:
+        return ZoneInfo("Asia/Kolkata")
+    except Exception:
+        # fallback to fixed +05:30
+        return dt.timezone(dt.timedelta(hours=5, minutes=30))
+
+
+KOLKATA = _get_kolkata_tz()
+
+
+def kolkata_now() -> dt.datetime:
+    return dt.datetime.now(KOLKATA)
+
+
+# ---- App init ----
+app = FastAPI(title="Hospital Appointment API")
+
+# CORS (configure with CORS_ORIGINS env var if needed)
+cors_origins = os.environ.get("CORS_ORIGINS")
+if cors_origins:
+    origins = [o.strip() for o in cors_origins.split(",") if o.strip()]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+
+@app.on_event("startup")
+def startup():
+    try:
+        init_db()
+        logger.info("Database initialized on startup")
+    except Exception:
+        logger.exception("Database initialization failed on startup")
+
+
+# ---- Models ----
 class AppointmentRequest(BaseModel):
-    patient_name: str = Field(..., min_length=1, max_length=100)
-    reason: Optional[str] = Field(None, max_length=500)
+    patient_name: str
+    reason: Optional[str] = None
     start_time: str | dt.datetime
-
-    @field_validator('patient_name')
-    @classmethod
-    def validate_patient_name(cls, v: str) -> str:
-        v = v.strip()
-        if not v:
-            raise ValueError("Patient name cannot be empty")
-        return v
 
 
 class AppointmentResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    
+
     id: str
     patient_name: str
     reason: Optional[str]
@@ -52,256 +85,138 @@ class AppointmentResponse(BaseModel):
 
 
 class CancelAppointmentRequest(BaseModel):
-    patient_name: str = Field(..., min_length=1)
+    patient_name: str
     date: str | dt.date
 
 
 class CancelAppointmentResponse(BaseModel):
     success: bool
     message: str
-    cancelled_count: int = 0
 
 
-class DateTimeParseError(Exception):
-    """Custom exception for datetime parsing errors"""
-    pass
+# ---- Parsing helpers ----
+def _parse_time_component(value: str) -> dt.time:
+    v = value.strip().lower().replace(".", "")
+    v = re.sub(r"\s+", " ", v)
 
+    # 12-hour
+    m = re.fullmatch(r"(\d{1,2})(?::(\d{2}))?\s*([ap]m)", v)
+    if m:
+        h = int(m.group(1))
+        mi = int(m.group(2) or 0)
+        ampm = m.group(3)
+        if not (1 <= h <= 12 and 0 <= mi <= 59):
+            raise ValueError("invalid 12-hour time")
+        if ampm == "pm" and h != 12:
+            h += 12
+        if ampm == "am" and h == 12:
+            h = 0
+        return dt.time(hour=h, minute=mi)
 
-# Helper Functions
-def normalize_specialty_filter(value: str) -> str:
-    """Normalize specialty filter for database query"""
-    cleaned = value.strip().lower()
-    cleaned = re.sub(
-        r"\b(dr|doctor|doctors|any|available|availability|show|check|find|finds|list|please|the|a|an|today|tomorrow|tommorow|now|tonight|speciality|specialty)\b",
-        " ",
-        cleaned,
-    )
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    return cleaned
-
-
-def parse_request_date(value: str | dt.date | dt.datetime | None) -> dt.date:
-    """Parse date from various formats with validation"""
-    if value is None:
-        return dt.datetime.now(KOLKATA).date()
-
-    if isinstance(value, dt.datetime):
-        return value.date()
-
-    if isinstance(value, dt.date):
-        return value
-
-    normalized = value.strip().lower().replace("tommorow", "tomorrow")
-    today = dt.datetime.now(KOLKATA).date()
-
-    if normalized == "today":
-        return today
-
-    if normalized == "tomorrow":
-        return today + dt.timedelta(days=1)
-
-    try:
-        parsed_date = dt.datetime.strptime(normalized, DATE_INPUT_FORMAT).date()
-        
-        # Validate date range
-        if parsed_date < today:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Cannot use past dates. Today is {today.strftime(DATE_INPUT_FORMAT)}"
-            )
-        
-        if parsed_date > today + dt.timedelta(days=MAX_FUTURE_DAYS):
-            raise HTTPException(
-                status_code=422,
-                detail=f"Cannot schedule appointments more than {MAX_FUTURE_DAYS} days in advance"
-            )
-        
-        return parsed_date
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Invalid date format. Use 'today', 'tomorrow', or dd-mm-yyyy (e.g., {today.strftime(DATE_INPUT_FORMAT)})",
-        ) from exc
-
-
-def parse_time_component(time_str: str) -> dt.time:
-    """Parse time string with support for 12/24 hour formats"""
-    normalized = time_str.strip().lower().replace(".", "")
-    normalized = re.sub(r"\s+", " ", normalized)
-
-    # Handle 12-hour format with am/pm
-    am_pm_match = re.fullmatch(r"(\d{1,2})(?::(\d{2}))?\s*([ap]m)", normalized)
-    if am_pm_match:
-        hour = int(am_pm_match.group(1))
-        minute = int(am_pm_match.group(2) or 0)
-        meridiem = am_pm_match.group(3)
-
-        if hour < 1 or hour > 12 or minute < 0 or minute > 59:
-            raise ValueError("Invalid 12-hour time format")
-
-        if meridiem == "pm" and hour != 12:
-            hour += 12
-        if meridiem == "am" and hour == 12:
-            hour = 0
-        return dt.time(hour=hour, minute=minute)
-
-    # Handle 24-hour format
+    # 24-hour
     for fmt in ("%H:%M", "%H"):
         try:
-            parsed_time = dt.datetime.strptime(normalized, fmt).time()
-            if parsed_time.hour > 23 or parsed_time.minute > 59:
-                raise ValueError("Invalid time")
-            return parsed_time
+            return dt.datetime.strptime(v, fmt).time()
         except ValueError:
             continue
 
-    raise ValueError(f"Unsupported time format: '{time_str}'. Use HH:MM or 12-hour format with am/pm")
+    raise ValueError("unsupported time format")
 
 
-def parse_iso_datetime_safe(dt_str: str) -> Optional[dt.datetime]:
-    """Safely parse ISO datetime string with timezone"""
-    # Try with dateutil if available
+def _parse_iso(s: str) -> Optional[dt.datetime]:
+    s = s.strip()
+    if not s:
+        return None
+    # try python's fromisoformat (handles +HH:MM); accept trailing Z
     try:
-        from dateutil import parser as dateutil_parser
-        return dateutil_parser.parse(dt_str)
-    except ImportError:
-        pass
-    
-    # Fallback to fromisoformat
-    try:
-        # Handle Zulu timezone
-        if dt_str.endswith('Z'):
-            dt_str = dt_str[:-1] + '+00:00'
-        return dt.datetime.fromisoformat(dt_str)
-    except ValueError:
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        return dt.datetime.fromisoformat(s)
+    except Exception:
         return None
 
 
-def validate_datetime_range(parsed_dt: dt.datetime, now: dt.datetime) -> None:
-    """Validate that datetime is within acceptable range"""
-    # Check year range (reject obviously wrong years)
-    if parsed_dt.year < now.year - 1:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Year {parsed_dt.year} is too far in the past. Please use {now.year} or {now.year + 1}."
-        )
-    
-    if parsed_dt.year > now.year + 2:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Year {parsed_dt.year} is too far in the future. Please use {now.year} or {now.year + 1}."
-        )
-    
-    # Check if date is in the past
-    if parsed_dt.date() < now.date():
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot schedule appointments on past dates. Date {parsed_dt.strftime(DATE_INPUT_FORMAT)} is before today {now.strftime(DATE_INPUT_FORMAT)}."
-        )
-    
-    # Check if time is too close to now
-    min_allowed_time = now + dt.timedelta(minutes=MIN_ADVANCE_MINUTES)
-    if parsed_dt < min_allowed_time:
-        if parsed_dt.date() == now.date():
-            raise HTTPException(
-                status_code=400,
-                detail=f"Appointments must be scheduled at least {MIN_ADVANCE_MINUTES} minutes in advance. "
-                       f"Current time: {now.strftime('%H:%M')}, requested time: {parsed_dt.strftime('%H:%M')}"
-            )
-    
-    # Check future limit
-    max_allowed_date = now.date() + dt.timedelta(days=MAX_FUTURE_DAYS)
-    if parsed_dt.date() > max_allowed_date:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Cannot schedule appointments more than {MAX_FUTURE_DAYS} days in advance. "
-                   f"Max allowed date: {max_allowed_date.strftime(DATE_INPUT_FORMAT)}"
-        )
+def parse_request_date(value: str | dt.date | dt.datetime | None) -> dt.date:
+    if value is None:
+        return kolkata_now().date()
+    if isinstance(value, dt.datetime):
+        return value.date()
+    if isinstance(value, dt.date):
+        return value
 
-
-def parse_start_time(start_time_input: str | dt.datetime) -> dt.datetime:
-    """
-    Parse start_time from various formats with comprehensive validation
-    
-    Supported formats:
-    - ISO datetime: 2026-04-15T15:30:00
-    - Relative: today at 3:30pm, tomorrow at 09:00
-    - Absolute: 15-04-2026 15:30, 15-04-2026 3:30pm
-    """
-    now = dt.datetime.now(KOLKATA)
-    
+    s = str(value).strip().lower().replace("tommorow", "tomorrow")
+    today = kolkata_now().date()
+    if s == "today":
+        return today
+    if s == "tomorrow":
+        return today + dt.timedelta(days=1)
     try:
-        parsed = None
-        
-        # Case 1: Already a datetime object
-        if isinstance(start_time_input, dt.datetime):
-            parsed = start_time_input
-        
-        # Case 2: Parse from string
-        elif isinstance(start_time_input, str):
-            raw = start_time_input.strip()
-            if not raw:
-                raise HTTPException(status_code=422, detail="start_time cannot be empty")
-            
-            normalized = re.sub(r"\s+", " ", raw.lower()).replace("tommorow", "tomorrow")
-            
-            # Try ISO format first
-            iso_parsed = parse_iso_datetime_safe(raw)
-            if iso_parsed:
-                parsed = iso_parsed
-            
-            # Try relative format (today/tomorrow)
-            if parsed is None:
-                rel_match = re.fullmatch(r"(today|tomorrow)(?:\s+at)?\s+(.+)", normalized)
-                if rel_match:
-                    base_date = now.date()
-                    if rel_match.group(1) == "tomorrow":
-                        base_date += dt.timedelta(days=1)
-                    
-                    try:
-                        parsed_time = parse_time_component(rel_match.group(2))
-                        parsed = dt.datetime.combine(base_date, parsed_time)
-                    except ValueError as e:
-                        raise HTTPException(status_code=422, detail=f"Invalid time format: {str(e)}")
-            
-            # Try absolute format (dd-mm-yyyy)
-            if parsed is None:
-                abs_match = re.fullmatch(r"(\d{2}-\d{2}-\d{4})(?:\s+(.+))?", normalized)
-                if abs_match:
-                    try:
-                        parsed_date = dt.datetime.strptime(abs_match.group(1), DATE_INPUT_FORMAT).date()
-                        parsed_time_str = abs_match.group(2) or "09:00"  # Default to 9 AM
-                        parsed_time = parse_time_component(parsed_time_str)
-                        parsed = dt.datetime.combine(parsed_date, parsed_time)
-                    except ValueError as e:
-                        raise HTTPException(status_code=422, detail=f"Invalid date/time format: {str(e)}")
-            
-            # No valid format found
-            if parsed is None:
-                raise HTTPException(status_code=422, detail=START_TIME_ERROR_DETAIL)
-        
-        # Handle timezone
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=KOLKATA)
-        else:
-            parsed = parsed.astimezone(KOLKATA)
-        
-        # Validate datetime range
-        validate_datetime_range(parsed, now)
-        
-        return parsed
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Failed to parse start_time: {str(e)}. {START_TIME_ERROR_DETAIL}"
-        ) from e
+        return dt.datetime.strptime(s, DATE_INPUT_FORMAT).date()
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Date must be today/tomorrow or dd-mm-yyyy")
+
+
+def parse_start_time(value: str | dt.datetime) -> dt.datetime:
+    now = kolkata_now()
+
+    if isinstance(value, dt.datetime):
+        parsed = value
+    else:
+        raw = str(value).strip()
+        if not raw:
+            raise HTTPException(status_code=422, detail="start_time required")
+
+        # try ISO
+        parsed = _parse_iso(raw)
+
+        # try relative today/tomorrow
+        if parsed is None:
+            norm = re.sub(r"\s+", " ", raw.lower()).replace("tommorow", "tomorrow")
+            rel = re.fullmatch(r"(today|tomorrow)(?:\s+at)?\s+(.+)", norm)
+            if rel:
+                base = now.date() + (dt.timedelta(days=1) if rel.group(1) == "tomorrow" else dt.timedelta())
+                try:
+                    t = _parse_time_component(rel.group(2))
+                    parsed = dt.datetime.combine(base, t)
+                except ValueError as e:
+                    raise HTTPException(status_code=422, detail=str(e))
+
+        # try dd-mm-yyyy
+        if parsed is None:
+            m = re.fullmatch(r"(\d{2}-\d{2}-\d{4})(?:\s+(.+))?", raw)
+            if m:
+                try:
+                    d = dt.datetime.strptime(m.group(1), DATE_INPUT_FORMAT).date()
+                    t = _parse_time_component(m.group(2) or "09:00")
+                    parsed = dt.datetime.combine(d, t)
+                except ValueError as e:
+                    raise HTTPException(status_code=422, detail=str(e))
+
+        if parsed is None:
+            raise HTTPException(status_code=422, detail="Invalid start_time format")
+
+    # ensure timezone aware in KOLKATA
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=KOLKATA)
+    else:
+        parsed = parsed.astimezone(KOLKATA)
+
+    # Validate reasonable range
+    if parsed.year < (now.year - 1) or parsed.year > (now.year + 2):
+        raise HTTPException(status_code=422, detail="start_time year looks incorrect")
+
+    # Enforce minimum advance
+    min_allowed = now + dt.timedelta(minutes=MIN_ADVANCE_MINUTES)
+    max_allowed = now + dt.timedelta(days=MAX_FUTURE_DAYS)
+    if parsed < min_allowed:
+        raise HTTPException(status_code=400, detail=f"Appointments must be at least {MIN_ADVANCE_MINUTES} minutes in the future")
+    if parsed > max_allowed:
+        raise HTTPException(status_code=422, detail=f"Appointments cannot be more than {MAX_FUTURE_DAYS} days in advance")
+
+    return parsed
 
 
 def appointment_to_response(doc: dict) -> dict:
-    """Convert MongoDB document to API response format"""
     return {
         "id": str(doc["_id"]),
         "patient_name": doc["patient_name"],
@@ -312,188 +227,84 @@ def appointment_to_response(doc: dict) -> dict:
     }
 
 
-# API Endpoints
-@app.post("/schedule_appointment/", response_model=AppointmentResponse)
-def schedule_appointment(appointment: AppointmentRequest, db=Depends(get_db)):
-    """Schedule a new appointment"""
-    # Parse and validate start time
-    start_time = parse_start_time(appointment.start_time)
+# ---- Endpoints ----
+@app.get("/now")
+def now_endpoint():
     now = kolkata_now()
-    
-    # Double-check validation (redundant but safe)
+    return {"iso": now.isoformat(), "date": now.strftime("%d-%m-%Y"), "time": now.strftime("%H:%M:%S %Z")}
+
+
+@app.post("/schedule_appointment/", response_model=AppointmentResponse)
+def schedule_appointment(appt: AppointmentRequest, db=Depends(get_db)):
+    logger.info("Received schedule request for %s", appt.patient_name)
+    start_time = parse_start_time(appt.start_time)
+    now = kolkata_now()
+
+    # Double-check
     if start_time <= now:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "message": "Start time must be later than current time",
-                "parsed_start_time": start_time.isoformat(),
-                "server_now": now.isoformat(),
-                "time_difference_seconds": (start_time - now).total_seconds()
-            },
-        )
-    
-    # Check for duplicate appointments (optional)
-    start_time_utc_naive = to_utc_naive(start_time)
-    existing = db.appointments.find_one({
-        "patient_name": appointment.patient_name,
-        "start_time": start_time_utc_naive,
-        "cancelled": False
-    })
-    
-    if existing:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Patient {appointment.patient_name} already has an appointment at {start_time.strftime('%Y-%m-%d %H:%M')}"
-        )
-    
-    # Create appointment
-    created_at_utc_naive = to_utc_naive(kolkata_now())
-    
+        raise HTTPException(status_code=400, detail="Start time must be later than current time")
+
     doc = {
-        "patient_name": appointment.patient_name,
-        "reason": appointment.reason,
-        "start_time": start_time_utc_naive,
+        "patient_name": appt.patient_name,
+        "reason": appt.reason,
+        "start_time": to_utc_naive(start_time),
         "cancelled": False,
-        "created_at": created_at_utc_naive,
+        "created_at": to_utc_naive(now),
     }
-    
-    result = db.appointments.insert_one(doc)
-    inserted = db.appointments.find_one({"_id": result.inserted_id})
-    
+
+    res = db.appointments.insert_one(doc)
+    inserted = db.appointments.find_one({"_id": res.inserted_id})
     return appointment_to_response(inserted)
 
 
 @app.post("/cancel_appointment/", response_model=CancelAppointmentResponse)
-def cancel_appointment(request: CancelAppointmentRequest, db=Depends(get_db)):
-    """Cancel all appointments for a patient on a specific date"""
-    request_date = parse_request_date(request.date)
-    
+def cancel_appointment(req: CancelAppointmentRequest, db=Depends(get_db)):
+    request_date = parse_request_date(req.date)
     start_dt = dt.datetime.combine(request_date, dt.time.min, tzinfo=KOLKATA)
     end_dt = dt.datetime.combine(request_date, dt.time.max, tzinfo=KOLKATA)
-    
-    start_dt_q = to_utc_naive(start_dt)
-    end_dt_q = to_utc_naive(end_dt)
-    
-    result = db.appointments.update_many(
-        {
-            "patient_name": request.patient_name,
-            "start_time": {"$gte": start_dt_q, "$lte": end_dt_q},
-            "cancelled": False,
-        },
-        {"$set": {"cancelled": True}},
-    )
-    
-    if result.modified_count == 0:
-        raise HTTPException(
-            status_code=404, 
-            detail=f"No active appointments found for {request.patient_name} on {request_date.strftime(DATE_INPUT_FORMAT)}"
-        )
-    
-    return {
-        "success": True, 
-        "message": f"Cancelled {result.modified_count} appointment(s) for {request.patient_name}",
-        "cancelled_count": result.modified_count
-    }
+
+    start_q = to_utc_naive(start_dt)
+    end_q = to_utc_naive(end_dt)
+
+    res = db.appointments.update_many({
+        "patient_name": req.patient_name,
+        "start_time": {"$gte": start_q, "$lte": end_q},
+        "cancelled": False,
+    }, {"$set": {"cancelled": True}})
+
+    if res.modified_count == 0:
+        raise HTTPException(status_code=404, detail="No appointments found")
+
+    return {"success": True, "message": f"Cancelled {res.modified_count} appointment(s)"}
 
 
 @app.get("/list_appointments/", response_model=List[AppointmentResponse])
 def list_appointments(date: str = "today", db=Depends(get_db)):
-    """List all active appointments for a specific date"""
     request_date = parse_request_date(date)
-    
     start_dt = dt.datetime.combine(request_date, dt.time.min, tzinfo=KOLKATA)
     end_dt = dt.datetime.combine(request_date, dt.time.max, tzinfo=KOLKATA)
-    
+
     start_q = to_utc_naive(start_dt)
     end_q = to_utc_naive(end_dt)
-    
-    cursor = db.appointments.find(
-        {"cancelled": False, "start_time": {"$gte": start_q, "$lte": end_q}}
-    ).sort("start_time", 1)
-    
-    return [appointment_to_response(doc) for doc in cursor]
+
+    cursor = db.appointments.find({"cancelled": False, "start_time": {"$gte": start_q, "$lte": end_q}}).sort("start_time", 1)
+    return [appointment_to_response(d) for d in cursor]
 
 
 @app.get("/check_doctor_availability/")
-def check_doctor_availability(
-    date: Optional[str] = None,
-    specialty: Optional[str] = None,
-    speciality: Optional[str] = None,
-    doctor_name: Optional[str] = None,
-    name: Optional[str] = None,
-    db=Depends(get_db),
-):
-    """Check doctor availability with optional filters"""
+def check_doctor_availability(date: Optional[str] = None, specialty: Optional[str] = None, speciality: Optional[str] = None, doctor_name: Optional[str] = None, name: Optional[str] = None, db=Depends(get_db)):
     resolved_date = parse_request_date(date)
     resolved_specialty = specialty or speciality
     resolved_name = doctor_name or name
-    
+
     query = {"available": True}
-    
     if resolved_name:
         query["name"] = {"$regex": resolved_name.strip(), "$options": "i"}
-    
     if resolved_specialty:
-        normalized_specialty = normalize_specialty_filter(resolved_specialty)
-        if normalized_specialty:
-            query["specialty"] = {"$regex": normalized_specialty, "$options": "i"}
-    
+        sf = normalize_specialty_filter(resolved_specialty)
+        if sf:
+            query["specialty"] = {"$regex": sf, "$options": "i"}
+
     cursor = db.doctors.find(query)
-    available_doctors = [
-        {"name": doc["name"], "specialty": doc["specialty"]} 
-        for doc in cursor
-    ]
-    
-    response = {
-        "date": resolved_date.strftime(DATE_INPUT_FORMAT),
-        "available_doctors": available_doctors,
-        "total_available": len(available_doctors)
-    }
-    
-    if not resolved_name and not resolved_specialty:
-        response["any_available_doctor"] = available_doctors[0] if available_doctors else None
-    
-    return response
-
-
-# Health check endpoint
-@app.get("/health")
-def health_check():
-    """Health check endpoint"""
-    now = kolkata_now()
-    return {
-        "status": "healthy",
-        "server_time": now.isoformat(),
-        "server_time_formatted": now.strftime(f"%Y-%m-%d %H:%M:%S"),
-        "timezone": str(KOLKATA),
-        "config": {
-            "min_advance_minutes": MIN_ADVANCE_MINUTES,
-            "max_future_days": MAX_FUTURE_DAYS,
-            "date_format": DATE_INPUT_FORMAT
-        }
-    }
-
-
-# Debug endpoint to test datetime parsing
-@app.post("/debug/parse_datetime/")
-def debug_parse_datetime(start_time: str):
-    """Debug endpoint to test datetime parsing"""
-    try:
-        parsed = parse_start_time(start_time)
-        now = kolkata_now()
-        
-        return {
-            "input": start_time,
-            "parsed": parsed.isoformat(),
-            "parsed_formatted": parsed.strftime("%Y-%m-%d %H:%M:%S %Z"),
-            "server_now": now.isoformat(),
-            "is_future": parsed > now,
-            "time_difference_minutes": (parsed - now).total_seconds() / 60 if parsed > now else None,
-            "validation_passed": parsed > now
-        }
-    except HTTPException as e:
-        return {
-            "input": start_time,
-            "error": e.detail,
-            "status_code": e.status_code
-        }
+    doctors = [{"name": d["name"], "specialty": d["specialty"]} for d in cursor]
+    return {"date": resolved_date.strftime(DATE_INPUT_FORMAT), "available_doctors": doctors}
