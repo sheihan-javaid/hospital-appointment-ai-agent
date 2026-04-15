@@ -164,9 +164,18 @@ def parse_start_time(value: str | dt.datetime) -> dt.datetime:
 @app.post("/schedule_appointment/", response_model=AppointmentResponse)
 def schedule_appointment(appointment: AppointmentRequest, db=Depends(get_db)):
     start_time = parse_start_time(appointment.start_time).astimezone(KOLKATA)
+    now = kolkata_now()
 
-    if start_time < dt.datetime.now(KOLKATA):
-        raise HTTPException(status_code=400, detail="Start time must be later than current time")
+    # Temporary debug: return parsed start_time and server 'now' when it's in the past
+    if start_time < now:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Start time must be later than current time",
+                "parsed_start_time": start_time.isoformat(),
+                "server_now": now.isoformat(),
+            },
+        )
 
     # Store times as UTC-naive datetimes in MongoDB
     start_time_utc_naive = to_utc_naive(start_time)
