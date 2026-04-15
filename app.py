@@ -28,7 +28,6 @@ if st.button("Schedule Appointment"):
         "reason": reason,
         "start_time": start_dt.isoformat(),
     }
-    st.write("Sending start_time:", payload["start_time"])  # small debug aid
     try:
         resp = requests.post(f"{base_url}/schedule_appointment/", json=payload, timeout=REQUEST_TIMEOUT)
         resp.raise_for_status()
