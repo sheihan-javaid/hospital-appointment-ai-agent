@@ -16,12 +16,19 @@ start_date = st.date_input("Appointment Date", value=dt.date.today() + dt.timede
 start_time = st.time_input("Appointment Time", value=dt.time(hour=9, minute=0))
 
 if st.button("Schedule Appointment"):
-    start_dt = dt.datetime.combine(start_date, start_time, tzinfo=KOLKATA)
+    # Ensure a timezone-aware datetime (Asia/Kolkata) is sent
+    naive_dt = dt.datetime.combine(start_date, start_time)
+    if naive_dt.tzinfo is None:
+        start_dt = naive_dt.replace(tzinfo=KOLKATA)
+    else:
+        start_dt = naive_dt.astimezone(KOLKATA)
+
     payload = {
         "patient_name": patient_name,
         "reason": reason,
-        "start_time": start_dt.isoformat()
+        "start_time": start_dt.isoformat(),
     }
+    st.write("Sending start_time:", payload["start_time"])  # small debug aid
     try:
         resp = requests.post(f"{base_url}/schedule_appointment/", json=payload, timeout=REQUEST_TIMEOUT)
         resp.raise_for_status()
