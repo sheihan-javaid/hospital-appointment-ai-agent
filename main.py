@@ -156,6 +156,16 @@ def parse_request_date(value: str | dt.date | dt.datetime | None) -> dt.date:
         raise HTTPException(status_code=422, detail=f"Date must be today/tomorrow or dd-mm-yyyy")
 
 
+def normalize_specialty_filter(value: str) -> str:
+    cleaned = value.strip().lower()
+    cleaned = re.sub(
+        r"\b(dr|doctor|doctors|any|available|availability|show|check|find|list|please|the|a|an|today|tomorrow|now|tonight|speciality|specialty)\b",
+        " ",
+        cleaned,
+    )
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
 def parse_start_time(value: str | dt.datetime) -> dt.datetime:
     now = kolkata_now()
 
