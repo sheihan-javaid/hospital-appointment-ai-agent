@@ -1,7 +1,8 @@
 fastapi
 pydantic
 requests
-sqlalchemy
 streamlit
 uvicorn
 uvicorn[standard]
+pymongo
+python-dotenv

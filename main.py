@@ -1,10 +1,10 @@
 from fastapi import FastAPI, HTTPException, Depends
-from sqlalchemy import select
 from typing import List
 import datetime as dt
 import re
 from pydantic import BaseModel, ConfigDict
-from database import init_db, Appointment, Doctor, get_db, IST, ist_now
+from zoneinfo import ZoneInfo
+from database import init_db, get_db, kolkata_now, to_utc_naive, KOLKATA
 
 DATE_INPUT_FORMAT = "%d-%m-%Y"
 START_TIME_ERROR_DETAIL = (
@@ -12,25 +12,25 @@ START_TIME_ERROR_DETAIL = (
     "or 'dd-mm-yyyy HH:MM' (optionally with am/pm)."
 )
 
-IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
+UTC = dt.timezone.utc
+
 init_db()
 app = FastAPI()
 
+
 class AppointmentRequest(BaseModel):
     patient_name: str
-    reason: str
+    reason: str | None = None
     start_time: str | dt.datetime
 
 
 class AppointmentResponse(BaseModel):
     model_config = ConfigDict(
         from_attributes=True,
-        json_encoders={
-            dt.datetime: lambda v: v.astimezone(IST).strftime("%Y-%m-%d at %H:%M:%S")
-        },
+        json_encoders={dt.datetime: lambda v: v.astimezone(KOLKATA).strftime("%Y-%m-%d at %H:%M:%S")},
     )
 
-    id: int
+    id: str
     patient_name: str
     reason: str | None
     start_time: dt.datetime
@@ -47,6 +47,7 @@ class CancelAppointmentResponse(BaseModel):
     success: bool
     message: str
 
+
 def normalize_specialty_filter(value: str) -> str:
     cleaned = value.strip().lower()
     cleaned = re.sub(
@@ -60,7 +61,7 @@ def normalize_specialty_filter(value: str) -> str:
 
 def parse_request_date(value: str | dt.date | dt.datetime | None) -> dt.date:
     if value is None:
-        return dt.datetime.now(IST).date()
+        return dt.datetime.now(KOLKATA).date()
 
     if isinstance(value, dt.datetime):
         return value.date()
@@ -69,7 +70,7 @@ def parse_request_date(value: str | dt.date | dt.datetime | None) -> dt.date:
         return value
 
     normalized = value.strip().lower().replace("tommorow", "tomorrow")
-    today = dt.datetime.now(IST).date()
+    today = dt.datetime.now(KOLKATA).date()
 
     if normalized == "today":
         return today
@@ -130,7 +131,7 @@ def parse_start_time(value: str | dt.datetime) -> dt.datetime:
         if parsed is None:
             rel = re.fullmatch(r"(today|tomorrow)(?:\s+at)?\s+(.+)", normalized)
             if rel:
-                base = dt.datetime.now(IST).date() + (
+                base = dt.datetime.now(KOLKATA).date() + (
                     dt.timedelta(days=1) if rel.group(1) == "tomorrow" else dt.timedelta()
                 )
                 try:
@@ -155,66 +156,97 @@ def parse_start_time(value: str | dt.datetime) -> dt.datetime:
             raise HTTPException(status_code=422, detail=START_TIME_ERROR_DETAIL)
 
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=IST)
+        parsed = parsed.replace(tzinfo=KOLKATA)
 
-    return parsed.astimezone(IST)
+    return parsed.astimezone(KOLKATA)
+
 
 @app.post("/schedule_appointment/", response_model=AppointmentResponse)
 def schedule_appointment(appointment: AppointmentRequest, db=Depends(get_db)):
-    start_time = parse_start_time(appointment.start_time).astimezone(IST)
+    start_time = parse_start_time(appointment.start_time).astimezone(KOLKATA)
 
-    if start_time < dt.datetime.now(IST):
+    if start_time < dt.datetime.now(KOLKATA):
         raise HTTPException(status_code=400, detail="Start time must be later than current time")
 
-    new_appointment = Appointment(
-        patient_name=appointment.patient_name,
-        reason=appointment.reason,
-        start_time=start_time,
-        created_at=ist_now(),
-    )
-    db.add(new_appointment)
-    db.commit()
-    db.refresh(new_appointment)
-    return new_appointment
+    # Store times as UTC-naive datetimes in MongoDB
+    start_time_utc_naive = to_utc_naive(start_time)
+    created_at_utc_naive = to_utc_naive(kolkata_now())
+
+    doc = {
+        "patient_name": appointment.patient_name,
+        "reason": appointment.reason,
+        "start_time": start_time_utc_naive,
+        "cancelled": False,
+        "created_at": created_at_utc_naive,
+    }
+
+    res = db.appointments.insert_one(doc)
+    inserted = db.appointments.find_one({"_id": res.inserted_id})
+
+    def to_response(d: dict) -> dict:
+        return {
+            "id": str(d["_id"]),
+            "patient_name": d["patient_name"],
+            "reason": d.get("reason"),
+            "start_time": (d["start_time"].replace(tzinfo=UTC).astimezone(KOLKATA)),
+            "cancelled": d.get("cancelled", False),
+            "created_at": (d["created_at"].replace(tzinfo=UTC).astimezone(KOLKATA)),
+        }
+
+    return to_response(inserted)
 
 
 @app.post("/cancel_appointment/", response_model=CancelAppointmentResponse)
 def cancel_appointment(request: CancelAppointmentRequest, db=Depends(get_db)):
     request_date = parse_request_date(request.date)
-    start_dt = dt.datetime.combine(request_date, dt.time.min, tzinfo=IST)
-    end_dt = dt.datetime.combine(request_date, dt.time.max, tzinfo=IST)
+    start_dt = dt.datetime.combine(request_date, dt.time.min, tzinfo=KOLKATA)
+    end_dt = dt.datetime.combine(request_date, dt.time.max, tzinfo=KOLKATA)
 
-    appointments = db.execute(
-        select(Appointment)
-        .where(Appointment.patient_name == request.patient_name)
-        .where(Appointment.start_time >= start_dt)
-        .where(Appointment.start_time <= end_dt)
-        .where(Appointment.cancelled.is_(False))
-    ).scalars().all()
+    start_dt_q = to_utc_naive(start_dt)
+    end_dt_q = to_utc_naive(end_dt)
 
-    if not appointments:
+    res = db.appointments.update_many(
+        {
+            "patient_name": request.patient_name,
+            "start_time": {"$gte": start_dt_q, "$lte": end_dt_q},
+            "cancelled": False,
+        },
+        {"$set": {"cancelled": True}},
+    )
+
+    if res.modified_count == 0:
         raise HTTPException(status_code=404, detail="No appointments found")
 
-    for a in appointments:
-        a.cancelled = True
-    db.commit()
-
-    return {"success": True, "message": f"Cancelled {len(appointments)} appointment(s)"}
+    return {"success": True, "message": f"Cancelled {res.modified_count} appointment(s)"}
 
 
 @app.get("/list_appointments/", response_model=List[AppointmentResponse])
 def list_appointments(date: str = "today", db=Depends(get_db)):
     request_date = parse_request_date(date)
-    start_dt = dt.datetime.combine(request_date, dt.time.min, tzinfo=IST)
-    end_dt = dt.datetime.combine(request_date, dt.time.max, tzinfo=IST)
+    start_dt = dt.datetime.combine(request_date, dt.time.min, tzinfo=KOLKATA)
+    end_dt = dt.datetime.combine(request_date, dt.time.max, tzinfo=KOLKATA)
 
-    return db.execute(
-        select(Appointment)
-        .where(Appointment.cancelled.is_(False))
-        .where(Appointment.start_time >= start_dt)
-        .where(Appointment.start_time <= end_dt)
-        .order_by(Appointment.start_time)
-    ).scalars().all()
+    start_q = to_utc_naive(start_dt)
+    end_q = to_utc_naive(end_dt)
+
+    cursor = db.appointments.find(
+        {"cancelled": False, "start_time": {"$gte": start_q, "$lte": end_q}}
+    ).sort("start_time", 1)
+
+    results = []
+    for d in cursor:
+        results.append(
+            {
+                "id": str(d["_id"]),
+                "patient_name": d["patient_name"],
+                "reason": d.get("reason"),
+                "start_time": d["start_time"].replace(tzinfo=UTC).astimezone(KOLKATA),
+                "cancelled": d.get("cancelled", False),
+                "created_at": d["created_at"].replace(tzinfo=UTC).astimezone(KOLKATA),
+            }
+        )
+
+    return results
 
 
 @app.get("/check_doctor_availability/")
@@ -230,25 +262,17 @@ def check_doctor_availability(
     resolved_specialty = specialty or speciality
     resolved_name = doctor_name or name
 
-    doctors_query = select(Doctor).where(Doctor.available.is_(True))
-
+    query = {"available": True}
     if resolved_name:
-        doctors_query = doctors_query.where(
-            Doctor.name.ilike(f"%{resolved_name.strip()}%")
-        )
-
+        # simple contains match
+        query["name"] = {"$regex": resolved_name.strip(), "$options": "i"}
     if resolved_specialty:
         sf = normalize_specialty_filter(resolved_specialty)
         if sf:
-            doctors_query = doctors_query.where(
-                Doctor.specialty.ilike(f"%{sf}%")
-            )
+            query["specialty"] = {"$regex": sf, "$options": "i"}
 
-    doctors = db.execute(doctors_query).scalars().all()
-
-    available_doctors = [
-        {"name": d.name, "specialty": d.specialty} for d in doctors
-    ]
+    cursor = db.doctors.find(query)
+    available_doctors = [{"name": d["name"], "specialty": d["specialty"]} for d in cursor]
 
     response = {
         "date": resolved_date.strftime(DATE_INPUT_FORMAT),

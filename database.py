@@ -1,63 +1,36 @@
 import datetime as dt
+from zoneinfo import ZoneInfo
+from pymongo import MongoClient
+from dotenv import load_dotenv
+import os
 
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, create_engine
-from sqlalchemy.types import TypeDecorator
-from sqlalchemy.dialects.sqlite import insert
-from sqlalchemy.orm import declarative_base, sessionmaker
+load_dotenv()
 
-DATABASE_URL = "sqlite:///./appointments_db.db"
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
+MONGO_URI = os.environ.get("MONGO_URI")
+if not MONGO_URI:
+    raise RuntimeError(
+        "Environment variable MONGO_URI is not set. Set it to your MongoDB connection string."
+    )
 
-IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
+MONGO_DB = os.environ.get("MONGO_DB", "hospital_ai_agent")
+
+client = MongoClient(MONGO_URI)
+db = client[MONGO_DB]
+
+KOLKATA = ZoneInfo("Asia/Kolkata")
 UTC = dt.timezone.utc
 
 
-def ist_now() -> dt.datetime:
-    return dt.datetime.now(IST)
+def kolkata_now() -> dt.datetime:
+    return dt.datetime.now(KOLKATA)
 
 
-class ISTDateTime(TypeDecorator):
-    impl = DateTime
-    cache_ok = True
-
-    def process_bind_param(self, value, dialect):
-        if value is None:
-            return None
-        # If value is timezone-aware, convert to UTC then drop tzinfo for storage
-        if value.tzinfo is not None:
-            return value.astimezone(UTC).replace(tzinfo=None)
-        # If naive, assume it's in IST (app may provide ist_now()), convert to UTC-naive
-        return value.replace(tzinfo=IST).astimezone(UTC).replace(tzinfo=None)
-
-    def process_result_value(self, value, dialect):
-        if value is None:
-            return None
-        # Stored values are UTC-naive: attach UTC tzinfo then convert to IST
-        if value.tzinfo is None:
-            return value.replace(tzinfo=UTC).astimezone(IST)
-        return value.astimezone(IST)
-
-
-class Appointment(Base):
-    __tablename__ = "appointments"
-
-    id           = Column(Integer,     primary_key=True, index=True)
-    patient_name = Column(String,      index=True)
-    reason       = Column(String,      index=True)
-    start_time   = Column(ISTDateTime, default=ist_now)
-    cancelled    = Column(Boolean,     default=False)
-    created_at   = Column(ISTDateTime, default=ist_now)
-
-
-class Doctor(Base):
-    __tablename__ = "doctors"
-
-    id        = Column(Integer, primary_key=True, index=True)
-    name      = Column(String,  unique=True, index=True, nullable=False)
-    specialty = Column(String,  nullable=False)
-    available = Column(Boolean, default=True, nullable=False)
+def to_utc_naive(value: dt.datetime) -> dt.datetime:
+    if value is None:
+        return None
+    if value.tzinfo is not None:
+        return value.astimezone(UTC).replace(tzinfo=None)
+    return value.replace(tzinfo=KOLKATA).astimezone(UTC).replace(tzinfo=None)
 
 
 Doctor_name = [
@@ -75,21 +48,23 @@ Doctor_name = [
 
 
 def _seed_default_doctors() -> None:
-    with engine.begin() as conn:
-        conn.execute(
-            insert(Doctor).prefix_with("OR IGNORE"),
-            Doctor_name,
-        )
+    # Ensure unique index on name
+    db.doctors.create_index("name", unique=True)
+    for doc in Doctor_name:
+        db.doctors.update_one({"name": doc["name"]}, {"$setOnInsert": doc}, upsert=True)
 
 
 def init_db() -> None:
-    Base.metadata.create_all(bind=engine)
+    # Create indexes useful for queries
+    db.doctors.create_index("name", unique=True)
+    db.appointments.create_index("start_time")
     _seed_default_doctors()
 
 
 def get_db():
-    db = SessionLocal()
+    # FastAPI-style dependency; yields the pymongo Database object
     try:
         yield db
     finally:
-        db.close()
+        # pymongo client is long-lived; do not close here
+        pass

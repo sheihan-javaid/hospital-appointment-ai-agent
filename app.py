@@ -1,9 +1,10 @@
 import datetime as dt
+from zoneinfo import ZoneInfo
 import streamlit as st
 import requests
 
 REQUEST_TIMEOUT = 30
-IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
+KOLKATA = ZoneInfo("Asia/Kolkata")
 
 st.title("Hospital Appointment Booking Portal")
 base_url = st.text_input("Backend URL", "https://hospital-appointment-ai-agent.onrender.com")
@@ -15,7 +16,7 @@ start_date = st.date_input("Appointment Date", value=dt.date.today() + dt.timede
 start_time = st.time_input("Appointment Time", value=dt.time(hour=9, minute=0))
 
 if st.button("Schedule Appointment"):
-    start_dt = dt.datetime.combine(start_date, start_time, tzinfo=IST) 
+    start_dt = dt.datetime.combine(start_date, start_time, tzinfo=KOLKATA)
     payload = {
         "patient_name": patient_name,
         "reason": reason,
