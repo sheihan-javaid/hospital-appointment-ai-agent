@@ -48,23 +48,21 @@ Doctor_name = [
 
 
 def _seed_default_doctors() -> None:
-    # Ensure unique index on name
     db.doctors.create_index("name", unique=True)
     for doc in Doctor_name:
         db.doctors.update_one({"name": doc["name"]}, {"$setOnInsert": doc}, upsert=True)
 
 
 def init_db() -> None:
-    # Create indexes useful for queries
     db.doctors.create_index("name", unique=True)
     db.appointments.create_index("start_time")
+    # Ensure appointment_id is unique when present
+    db.appointments.create_index("appointment_id", unique=True, sparse=True)
     _seed_default_doctors()
 
 
 def get_db():
-    # FastAPI-style dependency; yields the pymongo Database object
     try:
         yield db
     finally:
-        # pymongo client is long-lived; do not close here
         pass

@@ -6,6 +6,7 @@ import re
 import logging
 import os
 import ntplib
+import uuid
 
 from pydantic import BaseModel, ConfigDict
 from zoneinfo import ZoneInfo
@@ -13,18 +14,15 @@ from zoneinfo import ZoneInfo
 from database import init_db, get_db, to_utc_naive
 
 
-# ---- Configuration ----
 UTC = dt.timezone.utc
 MIN_ADVANCE_MINUTES = int(os.environ.get("MIN_ADVANCE_MINUTES", "15"))
 MAX_FUTURE_DAYS = int(os.environ.get("MAX_FUTURE_DAYS", "365"))
 
 
-# ---- Logging ----
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("main")
 
 
-# ---- Timezone helpers ----
 def _get_kolkata_tz() -> dt.tzinfo:
     try:
         return ZoneInfo("Asia/Kolkata")
@@ -46,7 +44,6 @@ def kolkata_now() -> dt.datetime:
         return dt.datetime.now(KOLKATA)
 
 
-# ---- App init ----
 app = FastAPI(title="Hospital Appointment API")
 
 cors_origins = os.environ.get("CORS_ORIGINS")
@@ -236,7 +233,7 @@ def normalize_specialty_filter(value: str) -> str:
 
 def appointment_to_response(doc: dict) -> dict:
     return {
-        "id": str(doc["_id"]),
+        "id": doc.get("appointment_id", str(doc["_id"])),
         "patient_name": doc["patient_name"],
         "reason": doc.get("reason"),
         "start_time": doc["start_time"].replace(tzinfo=UTC).astimezone(KOLKATA),
@@ -264,7 +261,10 @@ def schedule_appointment(appt: AppointmentRequest, db=Depends(get_db)):
     if start_time <= now:
         raise HTTPException(status_code=400, detail="Start time must be later than current time")
 
+    appt_id = f"APPT-{uuid.uuid4().hex[:8].upper()}"
+
     doc = {
+        "appointment_id": appt_id,
         "patient_name": appt.patient_name,
         "reason": appt.reason,
         "start_time": to_utc_naive(start_time),
