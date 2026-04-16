@@ -5,6 +5,7 @@ import datetime as dt
 import re
 import logging
 import os
+import ntplib
 
 from pydantic import BaseModel, ConfigDict
 from zoneinfo import ZoneInfo
@@ -35,7 +36,14 @@ KOLKATA = _get_kolkata_tz()
 
 
 def kolkata_now() -> dt.datetime:
-    return dt.datetime.now(KOLKATA)
+    try:
+        c = ntplib.NTPClient()
+        response = c.request("pool.ntp.org", version=3)
+        utc_time = dt.datetime.fromtimestamp(response.tx_time, tz=UTC)
+        return utc_time.astimezone(KOLKATA)
+    except Exception:
+        logger.warning("NTP sync failed, falling back to system clock")
+        return dt.datetime.now(KOLKATA)
 
 
 # ---- App init ----

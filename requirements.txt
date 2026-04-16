@@ -6,3 +6,4 @@ uvicorn
 uvicorn[standard]
 pymongo
 python-dotenv
+ntplib
