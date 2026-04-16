@@ -3,96 +3,83 @@ from zoneinfo import ZoneInfo
 import streamlit as st
 import requests
 
-REQUEST_TIMEOUT = 30
 KOLKATA = ZoneInfo("Asia/Kolkata")
+TIMEOUT = 30
 
 st.title("Hospital Appointment Booking Portal")
-base_url = st.text_input("Backend URL", "https://hospital-appointment-ai-agent.onrender.com")
+BASE_URL = st.text_input("Backend URL", "https://hospital-appointment-ai-agent.onrender.com")
 
-# Schedule appointment form
+
+def api_post(endpoint: str, payload: dict) -> dict | None:
+    try:
+        resp = requests.post(f"{BASE_URL}/{endpoint}/", json=payload, timeout=TIMEOUT)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.RequestException as e:
+        st.error(str(e))
+        return None
+
+
+def api_get(endpoint: str, params: dict) -> dict | None:
+    try:
+        resp = requests.get(f"{BASE_URL}/{endpoint}/", params=params, timeout=TIMEOUT)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.RequestException as e:
+        st.error(str(e))
+        return None
+
+
+#Schedule Appointment form
+st.subheader("Schedule Appointment")
 patient_name = st.text_input("Patient Name")
-reason = st.text_input("Reason for Appointment")
-start_date = st.date_input("Appointment Date", value=dt.date.today() + dt.timedelta(days=1))
-start_time = st.time_input("Appointment Time", value=dt.time(hour=9, minute=0))
+reason = st.text_input("Reason")
+start_date = st.date_input("Date", value=dt.date.today() + dt.timedelta(days=1))
+start_time = st.time_input("Time", value=dt.time(9, 0))
 
 if st.button("Schedule Appointment"):
-    # Ensure a timezone-aware datetime (Asia/Kolkata) is sent
-    naive_dt = dt.datetime.combine(start_date, start_time)
-    if naive_dt.tzinfo is None:
-        start_dt = naive_dt.replace(tzinfo=KOLKATA)
+    if not patient_name.strip():
+        st.error("Patient name is required.")
     else:
-        start_dt = naive_dt.astimezone(KOLKATA)
+        start_dt = dt.datetime.combine(start_date, start_time, tzinfo=KOLKATA)
+        data = api_post("schedule_appointment", {
+            "patient_name": patient_name.strip(),
+            "reason": reason.strip() or None,
+            "start_time": start_dt.isoformat(),
+        })
+        if data:
+            st.success(f"Appointment **{data['id']}** scheduled for **{data['patient_name']}**")
 
-    payload = {
-        "patient_name": patient_name,
-        "reason": reason,
-        "start_time": start_dt.isoformat(),
-    }
-    try:
-        resp = requests.post(f"{base_url}/schedule_appointment/", json=payload, timeout=REQUEST_TIMEOUT)
-        resp.raise_for_status()
-        data = resp.json()
-        st.success(f"Scheduled appointment #{data['id']} for {data['patient_name']}")
-    except requests.RequestException as exc:
-        st.error(f"Schedule failed: {exc}")
-
+# Cancel Appointment form
 st.divider()
-st.subheader("Cancel Appointments")
-
-cancel_name = st.text_input("Patient Name to Cancel", key="cancel_patient_name")
-cancel_date = st.text_input(
-    "Date to Cancel",
-    value=dt.date.today().strftime("%d-%m-%Y"),         
-    help="Use today, tomorrow, or dd-mm-yyyy like 13-04-2026",  
-    key="cancel_date",
-)
+st.subheader("Cancel Appointment")
+cancel_name = st.text_input("Patient Name", key="cancel_name")
+cancel_date = st.date_input("Date", value=dt.date.today(), key="cancel_date")
 
 if st.button("Cancel Appointment"):
-    cancel_payload = {
-        "patient_name": cancel_name,
-        "date": cancel_date,
-    }
-    try:
-        resp = requests.post(f"{base_url}/cancel_appointment/", json=cancel_payload, timeout=REQUEST_TIMEOUT)
-        resp.raise_for_status()
-        data = resp.json()
-        st.success(data.get("message", "Appointment cancelled."))
-    except requests.RequestException as exc:
-        st.error(f"Cancel failed: {exc}")
+    if not cancel_name.strip():
+        st.error("Patient name is required.")
+    else:
+        data = api_post("cancel_appointment", {
+            "patient_name": cancel_name.strip(),
+            "date": cancel_date.isoformat(),
+        })
+        if data:
+            st.success(data.get("message", "Appointment cancelled."))
 
+# List Appointments form
 st.divider()
 st.subheader("List Appointments")
-
-list_date = st.text_input(
-    "Date to View",
-    value=dt.date.today().strftime("%d-%m-%Y"),         
-    help="Use today, tomorrow, or dd-mm-yyyy like 13-04-2026",  
-    key="list_date",
-)
+list_date = st.date_input("Date", value=dt.date.today(), key="list_date")
 
 if st.button("Load Appointments"):
-    try:
-        resp = requests.get(
-            f"{base_url}/list_appointments/",
-            params={"date": list_date},
-            timeout=REQUEST_TIMEOUT,
+    data = api_get("list_appointments", {"date": list_date.isoformat()})
+    if data is None:
+        pass
+    elif not data:
+        st.info("No appointments for this date.")
+    else:
+        st.dataframe(
+            [{"ID": a["id"], "Patient": a["patient_name"], "Reason": a["reason"], "Start": a["start_time"]} for a in data],
+            use_container_width=True,
         )
-        resp.raise_for_status()
-        appointments = resp.json()
-        if not appointments:
-            st.info("No appointments for the selected date.")
-        else:
-            st.dataframe(
-                [
-                    {
-                        "ID": appt["id"],
-                        "Patient": appt["patient_name"],
-                        "Reason": appt["reason"],
-                        "Start": appt["start_time"],
-                    }
-                    for appt in appointments
-                ],
-                use_container_width=True,
-            )
-    except requests.RequestException as exc:
-        st.error(f"Listing failed: {exc}")

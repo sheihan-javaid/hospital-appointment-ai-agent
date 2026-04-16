@@ -67,7 +67,6 @@ def startup():
         logger.exception("Database initialization failed on startup")
 
 
-# ---- Models ----
 class AppointmentRequest(BaseModel):
     patient_name: str
     reason: Optional[str] = None
