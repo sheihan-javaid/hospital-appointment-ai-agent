@@ -142,7 +142,15 @@ def parse_request_date(value: str | dt.date | dt.datetime | None) -> dt.date:
         return now.date()
 
     if raw == "tomorrow":
-        return (now + dt.timedelta(days=1)).date()
+        resolved_date = (now + dt.timedelta(days=1)).date()
+
+        if resolved_date == now.date():
+            raise HTTPException(
+                status_code=400,
+                detail="Tomorrow date resolution failed"
+            )
+
+        return resolved_date
 
     try:
         parsed = dt.datetime.fromisoformat(raw.replace("Z", "+00:00"))
@@ -168,7 +176,7 @@ def parse_start_time(value: str | dt.datetime) -> dt.datetime:
         raw = str(value).strip().lower().replace("tommorow", "tomorrow")
 
         if not raw:
-            raise HTTPException(status_code=422, detail="start_time required")
+            raise HTTPException(status_code=422, detail="start_time required — expected format: 'today 10 am' or ISO datetime")
 
         try:
             parsed = dt.datetime.fromisoformat(raw.replace("Z", "+00:00"))
@@ -201,15 +209,26 @@ def parse_start_time(value: str | dt.datetime) -> dt.datetime:
         parsed = parsed.replace(tzinfo=KOLKATA)
     else:
         parsed = parsed.astimezone(KOLKATA)
+    # Log parsed and current times for debugging
+    logger.info(f"Parsed time: {parsed}, Current time: {now}")
 
     min_allowed = now + dt.timedelta(minutes=MIN_ADVANCE_MINUTES)
     max_allowed = now + dt.timedelta(days=MAX_FUTURE_DAYS)
 
-    if parsed < min_allowed:
+    # Strict future check: appointment must be later than now
+    if parsed <= now:
         raise HTTPException(
             status_code=400,
-            detail=f"Appointments must be at least {MIN_ADVANCE_MINUTES} minutes in the future"
+            detail="Start time must be later than current time"
         )
+
+    # Apply 15-minute advance rule only for same-day bookings
+    if parsed.date() == now.date():
+        if parsed < min_allowed:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Appointments must be at least {MIN_ADVANCE_MINUTES} minutes in the future"
+            )
 
     if parsed > max_allowed:
         raise HTTPException(
@@ -247,9 +266,21 @@ def now_endpoint():
     now = kolkata_now()
     return {
         "iso": now.isoformat(),
-        "date": now.isoformat(),
-        "time": now.strftime("%H:%M:%S %Z"),
+        "date": now.date().isoformat(),
+        "time": now.strftime("%H:%M:%S"),
     }
+
+
+# Helper to compute an earliest reasonable slot for scheduling
+def get_earliest_slot():
+    now = kolkata_now()
+    slot = now + dt.timedelta(hours=1)
+
+    # round to next 15-minute interval
+    minute = (slot.minute // 15 + 1) * 15
+    slot = slot.replace(minute=0, second=0, microsecond=0) + dt.timedelta(minutes=minute)
+
+    return slot
 
 
 @app.post("/schedule_appointment/", response_model=AppointmentResponse)
