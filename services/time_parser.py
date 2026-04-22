@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 import datetime as dt
 import functools
 import logging
-import re  
+import re
 
 logger = logging.getLogger("time_parser")
 
@@ -65,6 +65,7 @@ def detect_priority(text: str) -> str | None:
 def _resolve_earliest(reference_time: dt.datetime) -> dt.datetime:
     candidate = reference_time + dt.timedelta(minutes=EARLIEST_ADVANCE_MINUTES)
 
+    # round to next slot
     discard = dt.timedelta(
         minutes=candidate.minute % SLOT_ROUND_MINUTES,
         seconds=candidate.second,
@@ -74,9 +75,8 @@ def _resolve_earliest(reference_time: dt.datetime) -> dt.datetime:
         candidate += dt.timedelta(minutes=SLOT_ROUND_MINUTES) - discard
 
     if candidate.hour < BUSINESS_HOUR_START:
-        candidate = candidate.replace(
-            hour=BUSINESS_HOUR_START, minute=0, second=0, microsecond=0
-        )
+        candidate = candidate.replace(hour=BUSINESS_HOUR_START, minute=0, second=0, microsecond=0)
+
     elif candidate.hour >= BUSINESS_HOUR_END:
         next_day = candidate.date() + dt.timedelta(days=1)
         candidate = dt.datetime(
@@ -85,7 +85,6 @@ def _resolve_earliest(reference_time: dt.datetime) -> dt.datetime:
             tzinfo=KOLKATA,
         )
 
-    logger.debug("_resolve_earliest: reference=%s → slot=%s", reference_time, candidate)
     return candidate.astimezone(KOLKATA)
 
 
@@ -93,13 +92,13 @@ def _resolve_earliest(reference_time: dt.datetime) -> dt.datetime:
 # MAIN RESOLVER
 # -------------------------
 def resolve_datetime(text: str, reference_time: dt.datetime) -> dt.datetime:
+
     if not text or not text.strip():
         raise TimeParseError("Empty time expression")
 
-    # 🔥 STEP 0: CLEAN INPUT (fix "24th", "22nd", etc.)
     text = re.sub(r'(\d+)(st|nd|rd|th)', r'\1', text, flags=re.IGNORECASE)
+    text = text.lower().strip()
 
-    # ── Step 1: ensure reference_time is KOLKATA-aware ───────────
     if reference_time.tzinfo is None:
         reference_time = reference_time.replace(tzinfo=KOLKATA)
     else:
@@ -107,27 +106,56 @@ def resolve_datetime(text: str, reference_time: dt.datetime) -> dt.datetime:
 
     logger.debug("resolve_datetime: input=%r | reference=%s", text, reference_time)
 
-    # ── Step 2: priority phrases ──────────────────────────────────
     priority = detect_priority(text)
     if priority == "EARLIEST":
         return _resolve_earliest(reference_time)
 
-    # ── Step 3: NLP datetime recognition ─────────────────────────
     recognizer = _get_recognizer()
     results = recognizer.get_datetime_model().parse(text, reference_time)
 
     logger.debug("recognizer output: %s", results)
 
     if not results:
-        logger.warning("Unparseable time expression: %r", text)
+        logger.warning("Recognizer failed, trying fallback: %r", text)
+
+        match = re.search(
+            r"(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})\s+(\d{1,2})\s*(am|pm)",
+            text
+        )
+
+        if match:
+            month, day, hour, meridian = match.groups()
+
+            try:
+                dt_obj = dt.datetime.strptime(
+                    f"{month} {day} {hour} {meridian}",
+                    "%B %d %I %p"
+                )
+
+                dt_obj = dt_obj.replace(
+                    year=reference_time.year,
+                    tzinfo=KOLKATA
+                )
+
+                # 🔥 future correction
+                if dt_obj <= reference_time:
+                    dt_obj = dt_obj.replace(year=reference_time.year + 1)
+
+                return dt_obj
+
+            except Exception as e:
+                logger.warning("Fallback parse failed: %s", e)
+
         raise TimeParseError(f"Could not parse time: '{text}'")
 
+    # ===================================================
+    # NORMAL FLOW
+    # ===================================================
     entity = results[0].resolution
     values = entity.get("values", [])
 
     if not values:
-        logger.warning("No values in recognizer output for: %r", text)
-        raise TimeParseError("No valid datetime found in recognizer output")
+        raise TimeParseError("No valid datetime found")
 
     best = values[0]
 
@@ -138,7 +166,7 @@ def resolve_datetime(text: str, reference_time: dt.datetime) -> dt.datetime:
         dt_obj = dt.datetime.fromisoformat(best["value"])
 
     # -------------------------
-    # CASE 2: TIMEX (MISSING YEAR)
+    # CASE 2: TIMEX
     # -------------------------
     elif "timex" in best:
         timex = best["timex"]
@@ -149,20 +177,14 @@ def resolve_datetime(text: str, reference_time: dt.datetime) -> dt.datetime:
 
             dt_obj = dt.datetime.fromisoformat(timex)
 
-            # 🔥 Ensure future date
             if dt_obj <= reference_time:
                 dt_obj = dt_obj.replace(year=year + 1)
 
         except Exception:
-            logger.warning("Failed TIMEX parsing: %r → %s", text, best)
             raise TimeParseError(f"Could not parse time: '{text}'")
 
-    # -------------------------
-    # ❌ UNKNOWN FORMAT
-    # -------------------------
     else:
-        logger.warning("Unsupported format for: %r → %s", text, best)
-        raise TimeParseError(f"Unsupported datetime format returned: {best}")
+        raise TimeParseError(f"Unsupported datetime format: {best}")
 
     # -------------------------
     # FINAL NORMALIZATION
