@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo
 import datetime as dt
 import functools
 import logging
+import re  
 
 logger = logging.getLogger("time_parser")
 
@@ -34,10 +35,10 @@ PRIORITY_PHRASES = {
 # -------------------------
 # EARLIEST SLOT CONSTANTS
 # -------------------------
-EARLIEST_ADVANCE_MINUTES = 180  # 3-hour buffer for "asap"
-SLOT_ROUND_MINUTES       = 15   # round up to next 15-min boundary
-BUSINESS_HOUR_START      = 9    # 09:00 inclusive
-BUSINESS_HOUR_END        = 20   # 20:00 EXCLUSIVE — booking at 20:00 → next day 09:00
+EARLIEST_ADVANCE_MINUTES = 180
+SLOT_ROUND_MINUTES       = 15
+BUSINESS_HOUR_START      = 9
+BUSINESS_HOUR_END        = 20
 
 
 # -------------------------
@@ -64,7 +65,6 @@ def detect_priority(text: str) -> str | None:
 def _resolve_earliest(reference_time: dt.datetime) -> dt.datetime:
     candidate = reference_time + dt.timedelta(minutes=EARLIEST_ADVANCE_MINUTES)
 
-    # Round up to next 15-min slot
     discard = dt.timedelta(
         minutes=candidate.minute % SLOT_ROUND_MINUTES,
         seconds=candidate.second,
@@ -93,16 +93,11 @@ def _resolve_earliest(reference_time: dt.datetime) -> dt.datetime:
 # MAIN RESOLVER
 # -------------------------
 def resolve_datetime(text: str, reference_time: dt.datetime) -> dt.datetime:
-    """
-    Converts natural language → absolute datetime (Asia/Kolkata).
-
-    Resolution order:
-      1. Normalize reference_time to KOLKATA
-      2. Priority phrase check  → _resolve_earliest()
-      3. recognizers-text NLP   → structured datetime parse
-    """
     if not text or not text.strip():
         raise TimeParseError("Empty time expression")
+
+    # 🔥 STEP 0: CLEAN INPUT (fix "24th", "22nd", etc.)
+    text = re.sub(r'(\d+)(st|nd|rd|th)', r'\1', text, flags=re.IGNORECASE)
 
     # ── Step 1: ensure reference_time is KOLKATA-aware ───────────
     if reference_time.tzinfo is None:
@@ -136,12 +131,42 @@ def resolve_datetime(text: str, reference_time: dt.datetime) -> dt.datetime:
 
     best = values[0]
 
-    if "value" not in best:
+    # -------------------------
+    # CASE 1: FULL VALUE
+    # -------------------------
+    if "value" in best:
+        dt_obj = dt.datetime.fromisoformat(best["value"])
+
+    # -------------------------
+    # CASE 2: TIMEX (MISSING YEAR)
+    # -------------------------
+    elif "timex" in best:
+        timex = best["timex"]
+
+        try:
+            year = reference_time.year
+            timex = timex.replace("XXXX", str(year))
+
+            dt_obj = dt.datetime.fromisoformat(timex)
+
+            # 🔥 Ensure future date
+            if dt_obj <= reference_time:
+                dt_obj = dt_obj.replace(year=year + 1)
+
+        except Exception:
+            logger.warning("Failed TIMEX parsing: %r → %s", text, best)
+            raise TimeParseError(f"Could not parse time: '{text}'")
+
+    # -------------------------
+    # ❌ UNKNOWN FORMAT
+    # -------------------------
+    else:
         logger.warning("Unsupported format for: %r → %s", text, best)
         raise TimeParseError(f"Unsupported datetime format returned: {best}")
 
-    dt_obj = dt.datetime.fromisoformat(best["value"])
-
+    # -------------------------
+    # FINAL NORMALIZATION
+    # -------------------------
     if dt_obj.tzinfo is None:
         dt_obj = dt_obj.replace(tzinfo=KOLKATA)
 
