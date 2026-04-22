@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 from database import init_db, get_db, to_utc_naive
 from services.time_parser import resolve_datetime, TimeParseError
+from services.specialty_normalizer import normalize_specialty
 
 # -------------------------
 # CONFIG
@@ -190,21 +191,18 @@ def appointment_to_response(doc: dict) -> dict:
 # -------------------------
 # ENDPOINTS
 # -------------------------
-@app.get("/now")
-def now_endpoint():
-    now = kolkata_now()
-    return {
-        "iso": now.isoformat(),
-        "date": now.date().isoformat(),
-        "time": now.strftime("%H:%M:%S"),
-    }
-
+# @app.get("/now")
+# def now_endpoint():
+#     now = kolkata_now()
+#     return {
+#         "iso": now.isoformat(),
+#         "date": now.date().isoformat(),
+#         "time": now.strftime("%H:%M:%S"),
+#     }
 
 @app.post("/schedule_appointment/", response_model=AppointmentResponse)
 def schedule_appointment(appt: AppointmentRequest, db=Depends(get_db)):
     now = kolkata_now()
-
-    # 🔥 SINGLE SAFE PATH
     start_time = parse_start_time(appt.start_time)
 
     appt_id = f"APPT-{uuid.uuid4().hex[:8].upper()}"
@@ -290,7 +288,8 @@ def check_doctor_availability(
         query["name"] = {"$regex": resolved_name.strip(), "$options": "i"}
 
     if resolved_specialty:
-        query["specialty"] = {"$regex": resolved_specialty.strip(), "$options": "i"}
+        mapped = normalize_specialty(resolved_specialty)
+        query["specialty"] = {"$regex": mapped, "$options": "i"}
 
     doctors = [
         {"name": d["name"], "specialty": d["specialty"]}
