@@ -73,8 +73,6 @@ def _resolve_earliest(reference_time: dt.datetime) -> dt.datetime:
     if discard.total_seconds() > 0:
         candidate += dt.timedelta(minutes=SLOT_ROUND_MINUTES) - discard
 
-    # Clamp to business hours
-    # 20:00 is EXCLUDED — >= 20:00 pushes to next day
     if candidate.hour < BUSINESS_HOUR_START:
         candidate = candidate.replace(
             hour=BUSINESS_HOUR_START, minute=0, second=0, microsecond=0
@@ -121,7 +119,7 @@ def resolve_datetime(text: str, reference_time: dt.datetime) -> dt.datetime:
 
     # ── Step 3: NLP datetime recognition ─────────────────────────
     recognizer = _get_recognizer()
-    results = recognizer.get_date_time_model().parse(text, reference_time)
+    results = recognizer.get_datetime_model().parse(text, reference_time)
 
     logger.debug("recognizer output: %s", results)
 
