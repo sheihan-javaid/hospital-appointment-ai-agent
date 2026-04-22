@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict
 from zoneinfo import ZoneInfo
 
 from database import init_db, get_db, to_utc_naive
-from services.time_parser import resolve_datetime, TimeParseError
+from services.time_parser import resolve_datetime, resolve_date, TimeParseError
 from services.specialty_normalizer import normalize_specialty
 
 # -------------------------
@@ -66,8 +66,8 @@ class AppointmentResponse(BaseModel):
     patient_name: str
     reason: Optional[str]
     start_time: dt.datetime
-    start_date: str
-    start_time_str: str
+    start_date: str        # e.g. "Thursday, 23 April 2026"
+    start_time_str: str    # e.g. "3:00 PM"
     cancelled: bool
     created_at: dt.datetime
 
@@ -91,6 +91,13 @@ TIME_PARSE_ERROR_MESSAGES = {
     "OUTSIDE_BUSINESS_HOURS": "Appointments are only available between 9am and 8pm.",
 }
 
+DATE_PARSE_ERROR_MESSAGES = {
+    "EMPTY_INPUT":      "Please provide a date.",
+    "UNPARSABLE_DATE":  "I couldn't understand that date. Try saying 'today', 'tomorrow', a day name like 'Monday', or a date like 'April 25'.",
+    "DATE_IN_PAST":     "That date has already passed. Please provide a future date.",
+    "DATE_TOO_FAR":     "That date is too far ahead. Please choose a date within the next year.",
+}
+
 # -------------------------
 # TIME HELPERS
 # -------------------------
@@ -104,7 +111,7 @@ def normalize_to_ist(dt_obj: dt.datetime) -> dt.datetime:
     return dt_obj.astimezone(KOLKATA)
 
 # -------------------------
-# SINGLE SOURCE OF TRUTH TIME PARSER
+# SINGLE SOURCE OF TRUTH TIME PARSER (schedule flow)
 # -------------------------
 def parse_start_time(value: str) -> dt.datetime:
     now = kolkata_now()
@@ -133,7 +140,9 @@ def parse_start_time(value: str) -> dt.datetime:
     return parsed
 
 # -------------------------
-# DATE PARSER (CANCEL / LIST ONLY)
+# DATE PARSER (cancel / list flows)
+# Accepts natural language: "today", "tomorrow", "monday",
+# "next friday", "april 23rd", "24th april", or YYYY-MM-DD.
 # -------------------------
 def parse_request_date(value: str | dt.date | None) -> dt.date:
     now = kolkata_now()
@@ -144,21 +153,20 @@ def parse_request_date(value: str | dt.date | None) -> dt.date:
     if isinstance(value, dt.date):
         return value
 
-    raw = str(value).strip().lower()
+    raw = str(value).strip()
 
-    if raw == "today":
-        return now.date()
-
-    if raw == "tomorrow":
-        return (now + dt.timedelta(days=1)).date()
-
+    # fast path: already a valid ISO date string
     try:
         return dt.date.fromisoformat(raw)
     except ValueError:
-        raise HTTPException(
-            status_code=422,
-            detail="Date must be 'today', 'tomorrow', or YYYY-MM-DD.",
-        )
+        pass
+
+    # natural language path — delegate to resolve_date
+    try:
+        return resolve_date(raw, now)
+    except TimeParseError as e:
+        msg = DATE_PARSE_ERROR_MESSAGES.get(str(e), "I couldn't understand that date.")
+        raise HTTPException(status_code=422, detail=msg)
 
 # -------------------------
 # RESPONSE MAPPER (SAFE TZ)
@@ -180,8 +188,8 @@ def appointment_to_response(doc: dict) -> dict:
         "patient_name": doc["patient_name"],
         "reason": doc.get("reason"),
         "start_time": start_time,
-        "start_date": start_time.strftime("%A, %d %B %Y"),   # "Wednesday, 23 April 2026"
-        "start_time_str": start_time.strftime("%I:%M %p").lstrip("0"),  # "10:00 AM"
+        "start_date": start_time.strftime("%A, %d %B %Y"),           # "Thursday, 23 April 2026"
+        "start_time_str": start_time.strftime("%I:%M %p").lstrip("0"), # "3:00 PM"
         "cancelled": doc.get("cancelled", False),
         "created_at": created_at,
     }
