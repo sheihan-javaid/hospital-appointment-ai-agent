@@ -2,8 +2,10 @@ fastapi
 pydantic
 requests
 streamlit
-uvicorn
 uvicorn[standard]
 pymongo
 python-dotenv
 ntplib
+recognizers-text-suite
+pytest
+emoji<2
