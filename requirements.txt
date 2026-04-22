@@ -9,3 +9,5 @@ ntplib
 recognizers-text-suite
 pytest
 emoji<2
+dateparser
+pendulum
