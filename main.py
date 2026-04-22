@@ -188,8 +188,8 @@ def appointment_to_response(doc: dict) -> dict:
         "patient_name": doc["patient_name"],
         "reason": doc.get("reason"),
         "start_time": start_time,
-        "start_date": start_time.strftime("%A, %d %B %Y"),           # "Thursday, 23 April 2026"
-        "start_time_str": start_time.strftime("%I:%M %p").lstrip("0"), # "3:00 PM"
+        "start_date": start_time.strftime("%A, %d %B %Y"),           
+        "start_time_str": start_time.strftime("%I:%M %p").lstrip("0"), 
         "cancelled": doc.get("cancelled", False),
         "created_at": created_at,
     }
