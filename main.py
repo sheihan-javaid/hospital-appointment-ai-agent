@@ -12,7 +12,6 @@ from zoneinfo import ZoneInfo
 from database import init_db, get_db, to_utc_naive
 from services.time_parser import resolve_datetime, TimeParseError
 
-
 # -------------------------
 # CONFIG
 # -------------------------
@@ -25,8 +24,7 @@ MAX_FUTURE_DAYS = int(os.environ.get("MAX_FUTURE_DAYS", "365"))
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("main")
 
-app = FastAPI(title="Hospital Appointment API")
-
+app = FastAPI(title="VAPI Safe Hospital Appointment API")
 
 # -------------------------
 # CORS
@@ -41,7 +39,6 @@ if cors_origins:
         allow_headers=["*"],
     )
 
-
 # -------------------------
 # STARTUP
 # -------------------------
@@ -53,15 +50,13 @@ def startup():
     except Exception:
         logger.exception("DB init failed")
 
-
 # -------------------------
 # MODELS
 # -------------------------
 class AppointmentRequest(BaseModel):
     patient_name: str
     reason: Optional[str] = None
-    start_time: str | dt.datetime
-
+    start_time: str   # RAW TEXT ONLY (VAPI SAFE)
 
 class AppointmentResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -73,16 +68,13 @@ class AppointmentResponse(BaseModel):
     cancelled: bool
     created_at: dt.datetime
 
-
 class CancelAppointmentRequest(BaseModel):
     patient_name: str
     date: str | dt.date
 
-
 class CancelAppointmentResponse(BaseModel):
     success: bool
     message: str
-
 
 # -------------------------
 # TIME HELPERS
@@ -96,24 +88,24 @@ def normalize_to_ist(dt_obj: dt.datetime) -> dt.datetime:
         return dt_obj.replace(tzinfo=KOLKATA)
     return dt_obj.astimezone(KOLKATA)
 
-
 # -------------------------
-# TIME PARSING (ONLY NLP HERE)
+# 🔥 SINGLE SOURCE OF TRUTH TIME PARSER
 # -------------------------
-def parse_start_time(value: str | dt.datetime) -> dt.datetime:
+def parse_start_time(value: str) -> dt.datetime:
     now = kolkata_now()
 
-    # already datetime
-    if isinstance(value, dt.datetime):
-        parsed = value
-    else:
-        try:
-            parsed = resolve_datetime(str(value), now)
-        except TimeParseError:
-            raise HTTPException(
-                status_code=422,
-                detail="Could not understand date/time. Try 'tomorrow 5 pm' or 'next Monday 10 am'"
-            )
+    if not isinstance(value, str):
+        value = str(value)
+
+    value = value.strip()
+
+    try:
+        parsed = resolve_datetime(value, now)
+    except TimeParseError as e:
+        raise HTTPException(
+            status_code=422,
+            detail=str(e)
+        )
 
     parsed = normalize_to_ist(parsed)
 
@@ -143,15 +135,14 @@ def parse_start_time(value: str | dt.datetime) -> dt.datetime:
 
     return parsed
 
-
-def parse_request_date(value: str | dt.date | dt.datetime | None) -> dt.date:
+# -------------------------
+# DATE PARSER (CANCEL / LIST ONLY)
+# -------------------------
+def parse_request_date(value: str | dt.date | None) -> dt.date:
     now = kolkata_now()
 
     if value is None:
         return now.date()
-
-    if isinstance(value, dt.datetime):
-        return normalize_to_ist(value).date()
 
     if isinstance(value, dt.date):
         return value
@@ -172,20 +163,29 @@ def parse_request_date(value: str | dt.date | dt.datetime | None) -> dt.date:
             detail="Date must be 'today', 'tomorrow', or YYYY-MM-DD"
         )
 
-
 # -------------------------
-# RESPONSE MAPPER
+# RESPONSE MAPPER (SAFE TZ)
 # -------------------------
 def appointment_to_response(doc: dict) -> dict:
+    start_time = doc["start_time"]
+    created_at = doc["created_at"]
+
+    if start_time.tzinfo is None:
+        start_time = start_time.replace(tzinfo=UTC)
+    start_time = start_time.astimezone(KOLKATA)
+
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=UTC)
+    created_at = created_at.astimezone(KOLKATA)
+
     return {
         "id": doc.get("appointment_id", str(doc["_id"])),
         "patient_name": doc["patient_name"],
         "reason": doc.get("reason"),
-        "start_time": doc["start_time"].replace(tzinfo=UTC).astimezone(KOLKATA),
+        "start_time": start_time,
         "cancelled": doc.get("cancelled", False),
-        "created_at": doc["created_at"].replace(tzinfo=UTC).astimezone(KOLKATA),
+        "created_at": created_at,
     }
-
 
 # -------------------------
 # ENDPOINTS
@@ -204,6 +204,7 @@ def now_endpoint():
 def schedule_appointment(appt: AppointmentRequest, db=Depends(get_db)):
     now = kolkata_now()
 
+    # 🔥 SINGLE SAFE PATH
     start_time = parse_start_time(appt.start_time)
 
     appt_id = f"APPT-{uuid.uuid4().hex[:8].upper()}"
@@ -289,10 +290,7 @@ def check_doctor_availability(
         query["name"] = {"$regex": resolved_name.strip(), "$options": "i"}
 
     if resolved_specialty:
-        query["specialty"] = {
-            "$regex": resolved_specialty.strip(),
-            "$options": "i"
-        }
+        query["specialty"] = {"$regex": resolved_specialty.strip(), "$options": "i"}
 
     doctors = [
         {"name": d["name"], "specialty": d["specialty"]}
