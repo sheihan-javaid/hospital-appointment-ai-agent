@@ -78,6 +78,18 @@ class CancelAppointmentResponse(BaseModel):
     message: str
 
 # -------------------------
+# TIME PARSE ERROR MESSAGES
+# Human-readable versions of TimeParseError codes for VAPI responses.
+# -------------------------
+TIME_PARSE_ERROR_MESSAGES = {
+    "EMPTY_INPUT":            "Please provide a time for the appointment.",
+    "UNPARSABLE_TIME":        "I couldn't understand that time. Could you say it differently?",
+    "AMBIGUOUS_TIME":         "That time is ambiguous. Could you be more specific?",
+    "DATE_TOO_FAR":           "Appointments can only be booked up to a year in advance.",
+    "OUTSIDE_BUSINESS_HOURS": "Appointments are only available between 9am and 8pm.",
+}
+
+# -------------------------
 # TIME HELPERS
 # -------------------------
 def kolkata_now() -> dt.datetime:
@@ -90,48 +102,30 @@ def normalize_to_ist(dt_obj: dt.datetime) -> dt.datetime:
     return dt_obj.astimezone(KOLKATA)
 
 # -------------------------
-# 🔥 SINGLE SOURCE OF TRUTH TIME PARSER
+# SINGLE SOURCE OF TRUTH TIME PARSER
 # -------------------------
 def parse_start_time(value: str) -> dt.datetime:
     now = kolkata_now()
 
     if not isinstance(value, str):
         value = str(value)
-
     value = value.strip()
 
     try:
         parsed = resolve_datetime(value, now)
     except TimeParseError as e:
-        raise HTTPException(
-            status_code=422,
-            detail=str(e)
-        )
+        msg = TIME_PARSE_ERROR_MESSAGES.get(str(e), "I couldn't process that time.")
+        raise HTTPException(status_code=422, detail=msg)
 
     parsed = normalize_to_ist(parsed)
 
-    # -------------------------
-    # VALIDATION LAYER
-    # -------------------------
-    if parsed <= now:
-        raise HTTPException(
-            status_code=400,
-            detail="Start time must be in the future"
-        )
-
+    # Only validation main.py owns: minimum advance notice.
+    # Future guarantee and MAX_FUTURE_DAYS are enforced inside resolve_datetime.
     min_allowed = now + dt.timedelta(minutes=MIN_ADVANCE_MINUTES)
-    max_allowed = now + dt.timedelta(days=MAX_FUTURE_DAYS)
-
-    if parsed.date() == now.date() and parsed < min_allowed:
+    if parsed < min_allowed:
         raise HTTPException(
             status_code=400,
-            detail=f"Minimum {MIN_ADVANCE_MINUTES} minutes advance required"
-        )
-
-    if parsed > max_allowed:
-        raise HTTPException(
-            status_code=422,
-            detail="Appointment too far in future"
+            detail=f"Appointments require at least {MIN_ADVANCE_MINUTES} minutes advance notice.",
         )
 
     return parsed
@@ -161,7 +155,7 @@ def parse_request_date(value: str | dt.date | None) -> dt.date:
     except ValueError:
         raise HTTPException(
             status_code=422,
-            detail="Date must be 'today', 'tomorrow', or YYYY-MM-DD"
+            detail="Date must be 'today', 'tomorrow', or YYYY-MM-DD.",
         )
 
 # -------------------------
@@ -191,15 +185,6 @@ def appointment_to_response(doc: dict) -> dict:
 # -------------------------
 # ENDPOINTS
 # -------------------------
-# @app.get("/now")
-# def now_endpoint():
-#     now = kolkata_now()
-#     return {
-#         "iso": now.isoformat(),
-#         "date": now.date().isoformat(),
-#         "time": now.strftime("%H:%M:%S"),
-#     }
-
 @app.post("/schedule_appointment/", response_model=AppointmentResponse)
 def schedule_appointment(appt: AppointmentRequest, db=Depends(get_db)):
     now = kolkata_now()
@@ -240,11 +225,11 @@ def cancel_appointment(req: CancelAppointmentRequest, db=Depends(get_db)):
     )
 
     if res.modified_count == 0:
-        raise HTTPException(status_code=404, detail="No appointments found")
+        raise HTTPException(status_code=404, detail="No appointments found for that name and date.")
 
     return {
         "success": True,
-        "message": f"Cancelled {res.modified_count} appointment(s)"
+        "message": f"Cancelled {res.modified_count} appointment(s).",
     }
 
 
