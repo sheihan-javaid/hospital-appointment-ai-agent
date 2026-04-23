@@ -302,7 +302,7 @@ def list_appointments(date: str = "today", db=Depends(get_db)):
 
 @app.get("/check_doctor_availability/")
 def check_doctor_availability(
-    date: str = "today",           
+    date: Optional[str] = None,           
     specialty: Optional[str] = None,
     speciality: Optional[str] = None,
     doctor_name: Optional[str] = None,
