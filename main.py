@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
+import re
 import datetime as dt
 import logging
 import os
@@ -301,26 +302,33 @@ def list_appointments(date: str = "today", db=Depends(get_db)):
 def check_doctor_availability(
     date: Optional[str] = None,
     specialty: Optional[str] = None,
+    speciality: Optional[str] = None,
     doctor_name: Optional[str] = None,
     name: Optional[str] = None,
     db=Depends(get_db),
 ):
     resolved_date = parse_request_date(date)
 
-    resolved_specialty = specialty.strip() if isinstance(specialty, str) and specialty.strip() else None
+    if isinstance(speciality, str) and speciality.strip():
+        resolved_specialty = speciality.strip()
+    elif isinstance(specialty, str) and specialty.strip():
+        resolved_specialty = specialty.strip()
+    else:
+        resolved_specialty = None
+
     resolved_name = doctor_name or name
 
     query = {"available": True}
 
     if resolved_name:
-        query["name"] = {"$regex": resolved_name.strip(), "$options": "i"}
+        query["name"] = {"$regex": re.escape(resolved_name.strip()), "$options": "i"}
 
     if resolved_specialty:
         mapped = normalize_specialty(resolved_specialty)
-        query["specialty"] = {"$regex": mapped, "$options": "i"}
+        query["specialty"] = {"$regex": re.escape(mapped), "$options": "i"}
 
     doctors = [
-        {"name": d["name"], "specialty": d["specialty"], "doctor_id": d.get("doctor_id")} 
+        {"name": d.get("name"), "specialty": d.get("specialty"), "doctor_id": d.get("doctor_id")} 
         for d in db.doctors.find(query)
     ]
 
