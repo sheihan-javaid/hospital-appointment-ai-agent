@@ -301,7 +301,6 @@ def list_appointments(date: str = "today", db=Depends(get_db)):
 def check_doctor_availability(
     date: Optional[str] = None,
     specialty: Optional[str] = None,
-    speciality: Optional[str] = None,
     doctor_name: Optional[str] = None,
     name: Optional[str] = None,
     db=Depends(get_db),
