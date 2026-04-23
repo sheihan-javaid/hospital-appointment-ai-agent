@@ -1,76 +1,170 @@
-# Hospital AI Agent
+# 🏥 Hospital Appointment AI Agent
 
-A simple, local assistant that helps interpret and extract information from clinical text (dates, specialties, times, and more) so you can get fast, useful answers without digging through notes.
+An end-to-end **Voice AI-powered hospital appointment booking system** that lets users book, reschedule, and cancel appointments through natural conversation.
 
-Why this matters to you
-- Save time: get structured answers from free-form clinical notes.
-- Reduce errors: standardized outputs for scheduling and triage.
-- Easy to try: runs locally with minimal setup.
+This project combines **conversational AI, FastAPI backend engineering, and intelligent scheduling logic** to simulate a real-world healthcare assistant.
 
-Who should try this
-- Clinicians who want quick extraction of dates/times and specialties from notes.
-- Administrative staff who need to speed up triage and scheduling tasks.
-- Anyone evaluating small, privacy-conscious NLP tools locally.
+---
 
-Key features (user-focused)
-- Extracts and normalizes specialty names from text.
-- Parses and normalizes times and dates mentioned in notes.
-- Provides simple CLI-based usage for fast, local testing.
+## 🚀 Overview
 
-Quick start (3 minutes)
-1. Install Python 3.11+ (use system Python or a virtual environment).
-2. Create and activate a virtual environment:
+The Hospital Appointment AI Agent enables users to interact with a hospital system using natural language or voice. It extracts intent, understands context, and performs actions like booking, rescheduling, and cancelling appointments through a structured backend system.
+
+The goal is to build a **real-world deployable AI system**, not just a demo.
+
+---
+
+## 🧠 Key Features
+
+- 🎙️ Voice/Text conversational interface
+- 📅 Smart date & time understanding (e.g., “tomorrow morning”, “next Monday”)
+- 🔁 Full appointment lifecycle (book, reschedule, cancel)
+- 🏥 Doctor & specialty-based booking
+- ⚙️ FastAPI backend for scheduling and logic handling (vapi HTTP service)
+- 🔗 End-to-end AI + backend integration
+
+---
+
+## 🏗️ System Architecture
+
+User (Voice/Text)
+	↓
+Conversational AI Agent
+	↓
+Intent & Entity Extraction
+	↓
+FastAPI Backend (vapi)
+	↓
+Scheduling Logic / Database
+	↓
+Response to User
+
+---
+
+## 🛠️ Tech Stack
+
+- Python
+- FastAPI (vapi HTTP service)
+- LLM-based conversational layer (local or remote)
+- REST APIs
+- SQLite / PostgreSQL (optional)
+
+---
+
+## 📂 Project Structure
+
+hospital-ai-agent/
+│── main.py
+│── app.py (optional)
+│── vapi.py (FastAPI app)
+│── database.py
+│── services/
+│   ├── time_parser.py
+│   ├── specialty_normalizer.py
+│   └── scheduling.py
+│── models/
+│── routes/
+│── utils/
+│── requirements.txt
+│── README.md
+
+---
+
+## ⚡ Getting Started
+
+1. Clone the repository
+
+```bash
+git clone https://github.com/sheihan-javaid/hospital-appointment-ai-agent
+cd hospital-appointment-ai-agent
+```
+
+2. Create and activate a Python virtual environment
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 ```
 
-3. Install dependencies:
+3. Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-4. Run the app (try either):
+4. Start the FastAPI (vapi) service
+
+If the FastAPI app is exported as `vapi:app`:
 
 ```bash
-python main.py
-# or
-python app.py
+uvicorn vapi:app --reload --port 8000
 ```
 
-If the project uses a different entrypoint, running `python main.py` is a good first attempt.
+Or, if the app object lives in `app.py`:
 
-How to use (examples)
-- Extract a specialty from a sentence:
-
-```text
-Input: "Patient needs referral to cardiology for chest pain"
-Output: "cardiology"
+```bash
+uvicorn app:app --reload --port 8000
 ```
 
-- Parse a time/date from a note:
+5. Try the API (example)
 
-```text
-Input: "Follow up next Tuesday at 2pm"
-Output: "2026-04-28 14:00"  # example normalized datetime
+```bash
+curl http://localhost:8000/health
+
+curl -s -X POST http://localhost:8000/extract \
+  -H "Content-Type: application/json" \
+  -d '{"text":"Book an appointment with cardiology next Tuesday at 10am"}'
 ```
 
-Tips and behavior
-- The tool focuses on short text snippets rather than full EMR dumps.
-- Results are best-effort—always verify critical scheduling information.
-- Designed to run locally to help protect patient data; avoid uploading PHI to external services unless explicitly configured.
+---
 
-Troubleshooting
-- If you see missing packages, re-run `pip install -r requirements.txt`.
-- If `python main.py` does nothing, try `python app.py` or open `main.py` to see usage instructions.
+## User Scenarios (examples)
 
-Privacy & Data
-- This project is intended to run locally. Do not send protected health information (PHI) to third-party services.
+- "I need to see a cardiologist next week" → Agent asks details, suggests slots, completes booking.
+- "Reschedule my ENT appointment from Monday to Thursday morning" → Agent finds appointment, proposes options, confirms.
+- "Cancel my follow-up with Dr. Smith" → Agent cancels and confirms.
 
-Want help or want me to do more?
-- I can review `main.py` next to extract exact usage instructions and sample commands.
-- Open an issue or contact the maintainer with test cases you care about.
+---
 
-Thank you for trying the Hospital AI Agent — let me know which sample you want me to run next.
+## Privacy & Safety
+
+- This project is intended to run locally. Avoid sending PHI to third-party services unless explicitly authorized.
+- Use appropriate access controls and audit logging before integrating with real patient data.
+
+---
+
+## Want help?
+
+- I can wire up example calls, add a simple web UI, or extract exact API routes from `main.py`/`vapi.py` and add precise curl examples — tell me which you prefer.
+
+Thank you for exploring the Hospital Appointment AI Agent.
+
+⸻
+
+💡 Example Use Cases
+
+* “Book an appointment with a cardiologist tomorrow at 10 AM”
+* “Reschedule my appointment to next Friday afternoon”
+* “Cancel my current booking”
+
+⸻
+
+🔬 Future Improvements
+
+* Integration with real hospital EMR systems
+* Speech-to-text and text-to-speech pipeline
+* Multi-language conversational support
+* Authentication and patient history tracking
+* Cloud deployment (AWS / Azure / GCP)
+
+⸻
+
+📌 Motivation
+
+This project explores how AI and backend systems can work together to solve real-world healthcare workflow problems, improving accessibility and reducing manual effort in appointment management.
+
+⸻
+
+🤝 Contributing
+
+Contributions are welcome. Feel free to open issues or submit pull requests.
