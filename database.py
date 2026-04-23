@@ -3,6 +3,7 @@ from zoneinfo import ZoneInfo
 from pymongo import MongoClient
 from dotenv import load_dotenv
 import os
+import hashlib
 
 load_dotenv()
 
@@ -50,7 +51,12 @@ Doctor_name = [
 def _seed_default_doctors() -> None:
     db.doctors.create_index("name", unique=True)
     for doc in Doctor_name:
-        db.doctors.update_one({"name": doc["name"]}, {"$setOnInsert": doc}, upsert=True)
+        # deterministic doctor_id based on name to keep IDs stable across restarts
+        name = doc["name"].strip().lower()
+        digest = hashlib.sha1(name.encode("utf-8")).hexdigest()[:8].upper()
+        doc_copy = doc.copy()
+        doc_copy["doctor_id"] = f"DR-{digest}"
+        db.doctors.update_one({"name": doc["name"]}, {"$setOnInsert": doc_copy}, upsert=True)
 
 
 def init_db() -> None:
@@ -59,6 +65,14 @@ def init_db() -> None:
     # Ensure appointment_id is unique when present
     db.appointments.create_index("appointment_id", unique=True, sparse=True)
     _seed_default_doctors()
+    # Ensure doctors have a unique doctor_id and index it
+    db.doctors.create_index("doctor_id", unique=True, sparse=True)
+    for d in db.doctors.find({}):
+        if "doctor_id" not in d:
+            name = d.get("name", "").strip().lower()
+            digest = hashlib.sha1(name.encode("utf-8")).hexdigest()[:8].upper()
+            new_id = f"DR-{digest}"
+            db.doctors.update_one({"_id": d["_id"]}, {"$set": {"doctor_id": new_id}})
 
 
 def get_db():

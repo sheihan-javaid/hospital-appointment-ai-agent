@@ -36,17 +36,22 @@ patient_name = st.text_input("Patient Name")
 reason = st.text_input("Reason")
 start_date = st.date_input("Date", value=dt.date.today() + dt.timedelta(days=1))
 start_time = st.time_input("Time", value=dt.time(9, 0))
+doctor_name = st.text_input("Preferred Doctor Name (optional)")
 
 if st.button("Schedule Appointment"):
     if not patient_name.strip():
         st.error("Patient name is required.")
     else:
         start_dt = dt.datetime.combine(start_date, start_time, tzinfo=KOLKATA)
-        data = api_post("schedule_appointment", {
+        payload = {
             "patient_name": patient_name.strip(),
             "reason": reason.strip() or None,
             "start_time": start_dt.isoformat(),
-        })
+        }
+        if doctor_name.strip():
+            payload["doctor_name"] = doctor_name.strip()
+
+        data = api_post("schedule_appointment", payload)
         if data:
             st.success(f"Appointment **{data['id']}** scheduled for **{data['patient_name']}**")
 

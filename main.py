@@ -58,6 +58,8 @@ class AppointmentRequest(BaseModel):
     patient_name: str
     reason: Optional[str] = None
     start_time: str   # RAW TEXT ONLY (VAPI SAFE)
+    doctor_name: Optional[str] = None
+    doctor_id: Optional[str] = None
 
 class AppointmentResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -70,6 +72,8 @@ class AppointmentResponse(BaseModel):
     start_time_str: str    # e.g. "3:00 PM"
     cancelled: bool
     created_at: dt.datetime
+    doctor_name: Optional[str]
+    doctor_id: Optional[str]
 
 class CancelAppointmentRequest(BaseModel):
     patient_name: str
@@ -192,6 +196,8 @@ def appointment_to_response(doc: dict) -> dict:
         "start_time_str": start_time.strftime("%I:%M %p").lstrip("0"), 
         "cancelled": doc.get("cancelled", False),
         "created_at": created_at,
+        "doctor_name": doc.get("doctor_name"),
+        "doctor_id": doc.get("doctor_id"),
     }
 
 # -------------------------
@@ -204,6 +210,27 @@ def schedule_appointment(appt: AppointmentRequest, db=Depends(get_db)):
 
     appt_id = f"APPT-{uuid.uuid4().hex[:8].upper()}"
 
+    # Resolve doctor_name / doctor_id if provided; prefer doctor_id as canonical identifier
+    resolved_doctor_name = appt.doctor_name
+    resolved_doctor_id = appt.doctor_id
+
+    if resolved_doctor_id:
+        found = db.doctors.find_one({"doctor_id": resolved_doctor_id})
+        if not found:
+            raise HTTPException(status_code=400, detail="No doctor found with that doctor_id.")
+        if not resolved_doctor_name:
+            resolved_doctor_name = found.get("name")
+    elif resolved_doctor_name:
+        # try exact-ish match first, then looser match
+        matches = list(db.doctors.find({"name": {"$regex": f'^{resolved_doctor_name.strip()}$', "$options": "i"}}))
+        if len(matches) == 0:
+            matches = list(db.doctors.find({"name": {"$regex": resolved_doctor_name.strip(), "$options": "i"}}))
+        if len(matches) == 0:
+            raise HTTPException(status_code=400, detail="No matching doctor found for that name.")
+        if len(matches) > 1:
+            raise HTTPException(status_code=409, detail="Multiple doctors match that name; please provide doctor_id to disambiguate.")
+        resolved_doctor_id = matches[0].get("doctor_id")
+
     doc = {
         "appointment_id": appt_id,
         "patient_name": appt.patient_name,
@@ -212,6 +239,11 @@ def schedule_appointment(appt: AppointmentRequest, db=Depends(get_db)):
         "cancelled": False,
         "created_at": to_utc_naive(now),
     }
+
+    if resolved_doctor_name:
+        doc["doctor_name"] = resolved_doctor_name
+    if resolved_doctor_id:
+        doc["doctor_id"] = resolved_doctor_id
 
     db.appointments.insert_one(doc)
     return appointment_to_response(doc)
@@ -289,7 +321,7 @@ def check_doctor_availability(
         query["specialty"] = {"$regex": mapped, "$options": "i"}
 
     doctors = [
-        {"name": d["name"], "specialty": d["specialty"]}
+        {"name": d["name"], "specialty": d["specialty"], "doctor_id": d.get("doctor_id")} 
         for d in db.doctors.find(query)
     ]
 
