@@ -1,3 +1,5 @@
+# ![GitHub license](https://img.shields.io/github/license/sheihan-javaid/hospital-appointment-ai-agent) ![GitHub repo stars](https://img.shields.io/github/stars/sheihan-javaid/hospital-appointment-ai-agent?style=social) ![GitHub forks](https://img.shields.io/github/forks/sheihan-javaid/hospital-appointment-ai-agent?style=social) ![Python](https://img.shields.io/badge/python-3.11%2B-blue?logo=python) ![FastAPI](https://img.shields.io/badge/FastAPI-✨-informational?logo=fastapi)
+
 # 🏥 Hospital Appointment AI Agent
 
 An end-to-end **Voice AI-powered hospital appointment booking system** that lets users book, reschedule, and cancel appointments through natural conversation.
@@ -94,10 +96,10 @@ pip install -r requirements.txt
 
 4. Start the FastAPI (vapi) service
 
-If the FastAPI app is exported as `vapi:app`:
+If the FastAPI app is exported as `main:app`:
 
 ```bash
-uvicorn vapi:app --reload --port 8000
+uvicorn main:app --reload --port 8000
 ```
 
 Or, if the app object lives in `app.py`:
@@ -138,33 +140,3 @@ curl -s -X POST http://localhost:8000/extract \
 - I can wire up example calls, add a simple web UI, or extract exact API routes from `main.py`/`vapi.py` and add precise curl examples — tell me which you prefer.
 
 Thank you for exploring the Hospital Appointment AI Agent.
-
-⸻
-
-💡 Example Use Cases
-
-* “Book an appointment with a cardiologist tomorrow at 10 AM”
-* “Reschedule my appointment to next Friday afternoon”
-* “Cancel my current booking”
-
-⸻
-
-🔬 Future Improvements
-
-* Integration with real hospital EMR systems
-* Speech-to-text and text-to-speech pipeline
-* Multi-language conversational support
-* Authentication and patient history tracking
-* Cloud deployment (AWS / Azure / GCP)
-
-⸻
-
-📌 Motivation
-
-This project explores how AI and backend systems can work together to solve real-world healthcare workflow problems, improving accessibility and reducing manual effort in appointment management.
-
-⸻
-
-🤝 Contributing
-
-Contributions are welcome. Feel free to open issues or submit pull requests.
