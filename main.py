@@ -316,7 +316,7 @@ def list_appointments(
         return []
     return results
 
-@app.get("/check_doctor_availability/")
+@app.post("/check_doctor_availability/")
 def check_doctor_availability(
     date: Optional[str] = None,           
     specialty: Optional[str] = None,
