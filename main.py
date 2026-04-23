@@ -214,7 +214,6 @@ def schedule_appointment(appt: AppointmentRequest, db=Depends(get_db)):
 
     appt_id = f"APPT-{uuid.uuid4().hex[:8].upper()}"
 
-    # Resolve doctor_name / doctor_id if provided; prefer doctor_id as canonical identifier
     resolved_doctor_name = appt.doctor_name
     resolved_doctor_id = appt.doctor_id
 
@@ -225,7 +224,6 @@ def schedule_appointment(appt: AppointmentRequest, db=Depends(get_db)):
         if not resolved_doctor_name:
             resolved_doctor_name = found.get("name")
     elif resolved_doctor_name:
-        # try exact-ish match first, then looser match
         matches = list(db.doctors.find({"name": {"$regex": f'^{resolved_doctor_name.strip()}$', "$options": "i"}}))
         if len(matches) == 0:
             matches = list(db.doctors.find({"name": {"$regex": resolved_doctor_name.strip(), "$options": "i"}}))
@@ -282,12 +280,28 @@ def cancel_appointment(req: CancelAppointmentRequest, db=Depends(get_db)):
 
 
 @app.get("/list_appointments/", response_model=List[AppointmentResponse])
-def list_appointments(date: str = "today", db=Depends(get_db)):
-    request_date = parse_request_date(date)
-
+def list_appointments(
+    date: Optional[str] = None,
+    db=Depends(get_db)
+):
+    # 🚨 HARD CHECK — do NOT allow silent defaults
+    if not date or not date.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="date is required"
+        )
+    # Parse date safely
+    try:
+        request_date = parse_request_date(date)
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid date: {date}"
+        )
+    # Create day range in IST
     start_dt = dt.datetime.combine(request_date, dt.time.min, tzinfo=KOLKATA)
     end_dt = dt.datetime.combine(request_date, dt.time.max, tzinfo=KOLKATA)
-
+    # Query DB
     cursor = db.appointments.find(
         {
             "cancelled": False,
@@ -297,8 +311,11 @@ def list_appointments(date: str = "today", db=Depends(get_db)):
             },
         }
     ).sort("start_time", 1)
-
-    return [appointment_to_response(d) for d in cursor]
+    results = [appointment_to_response(d) for d in cursor]
+    # Optional: explicit empty response handling (helps debugging)
+    if not results:
+        return []
+    return results
 
 @app.get("/check_doctor_availability/")
 def check_doctor_availability(
