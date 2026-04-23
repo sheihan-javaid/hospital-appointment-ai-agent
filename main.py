@@ -58,7 +58,7 @@ def startup():
 class AppointmentRequest(BaseModel):
     patient_name: str
     reason: Optional[str] = None
-    start_time: str   # RAW TEXT ONLY (VAPI SAFE)
+    start_time: str   
     doctor_name: Optional[str] = None
     doctor_id: Optional[str] = None
 
@@ -69,8 +69,8 @@ class AppointmentResponse(BaseModel):
     patient_name: str
     reason: Optional[str]
     start_time: dt.datetime
-    start_date: str        # e.g. "Thursday, 23 April 2026"
-    start_time_str: str    # e.g. "3:00 PM"
+    start_date: str        
+    start_time_str: str    
     cancelled: bool
     created_at: dt.datetime
     doctor_name: Optional[str]
@@ -145,14 +145,17 @@ def parse_start_time(value: str) -> dt.datetime:
     return parsed
 
 # -------------------------
-# DATE PARSER (cancel / list flows)
-# Accepts natural language: "today", "tomorrow", "monday",
-# "next friday", "april 23rd", "24th april", or YYYY-MM-DD.
-# -------------------------
 def parse_request_date(value: str | dt.date | None) -> dt.date:
     now = kolkata_now()
 
-    if value is None:
+    if value is None or (isinstance(value, str) and not value.strip()):
+        # FIX: log a warning so silent fallbacks are visible
+        logger.warning(
+            "parse_request_date called with empty/None value — "
+            "defaulting to today (%s). Check that the AI is sending "
+            "the correct date parameter.",
+            now.date().isoformat(),
+        )
         return now.date()
 
     if isinstance(value, dt.date):
@@ -193,8 +196,8 @@ def appointment_to_response(doc: dict) -> dict:
         "patient_name": doc["patient_name"],
         "reason": doc.get("reason"),
         "start_time": start_time,
-        "start_date": start_time.strftime("%A, %d %B %Y"),           
-        "start_time_str": start_time.strftime("%I:%M %p").lstrip("0"), 
+        "start_date": start_time.strftime("%A, %d %B %Y"),
+        "start_time_str": start_time.strftime("%I:%M %p").lstrip("0"),
         "cancelled": doc.get("cancelled", False),
         "created_at": created_at,
         "doctor_name": doc.get("doctor_name"),
@@ -297,10 +300,9 @@ def list_appointments(date: str = "today", db=Depends(get_db)):
 
     return [appointment_to_response(d) for d in cursor]
 
-
 @app.get("/check_doctor_availability/")
 def check_doctor_availability(
-    date: Optional[str] = None,
+    date: str = "today",           
     specialty: Optional[str] = None,
     speciality: Optional[str] = None,
     doctor_name: Optional[str] = None,
@@ -308,6 +310,9 @@ def check_doctor_availability(
     db=Depends(get_db),
 ):
     resolved_date = parse_request_date(date)
+
+    # FIX: log the resolved date so bugs in AI tool calls are immediately visible
+    logger.info("check_doctor_availability: resolved date = %s (raw input = %r)", resolved_date.isoformat(), date)
 
     if isinstance(speciality, str) and speciality.strip():
         resolved_specialty = speciality.strip()
@@ -328,7 +333,7 @@ def check_doctor_availability(
         query["specialty"] = {"$regex": re.escape(mapped), "$options": "i"}
 
     doctors = [
-        {"name": d.get("name"), "specialty": d.get("specialty"), "doctor_id": d.get("doctor_id")} 
+        {"name": d.get("name"), "specialty": d.get("specialty"), "doctor_id": d.get("doctor_id")}
         for d in db.doctors.find(query)
     ]
 
