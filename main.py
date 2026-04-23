@@ -284,7 +284,6 @@ def list_appointments(
     date: Optional[str] = None,
     db=Depends(get_db)
 ):
-    # 🚨 HARD CHECK — do NOT allow silent defaults
     if not date or not date.strip():
         raise HTTPException(
             status_code=400,
@@ -328,7 +327,6 @@ def check_doctor_availability(
 ):
     resolved_date = parse_request_date(date)
 
-    # FIX: log the resolved date so bugs in AI tool calls are immediately visible
     logger.info("check_doctor_availability: resolved date = %s (raw input = %r)", resolved_date.isoformat(), date)
 
     if isinstance(speciality, str) and speciality.strip():
