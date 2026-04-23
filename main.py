@@ -84,6 +84,13 @@ class CancelAppointmentResponse(BaseModel):
     success: bool
     message: str
 
+class AvailabilityRequest(BaseModel):
+    date: str                         
+    specialty: Optional[str] = None
+    speciality: Optional[str] = None   
+    doctor_name: Optional[str] = None
+    name: Optional[str] = None 
+
 # -------------------------
 # TIME PARSE ERROR MESSAGES
 # Human-readable versions of TimeParseError codes for VAPI responses.
@@ -149,27 +156,30 @@ def parse_request_date(value: str | dt.date | None) -> dt.date:
     now = kolkata_now()
 
     if value is None or (isinstance(value, str) and not value.strip()):
-        # FIX: log a warning so silent fallbacks are visible
-        logger.warning(
-            "parse_request_date called with empty/None value — "
-            "defaulting to today (%s). Check that the AI is sending "
-            "the correct date parameter.",
-            now.date().isoformat(),
+        raise HTTPException(
+            status_code=422,
+            detail="A date is required. Try saying 'today', 'tomorrow', a day name like 'Monday', or a date like 'April 25'.",
         )
-        return now.date()
 
     if isinstance(value, dt.date):
+        if value < now.date():
+            raise HTTPException(status_code=422, detail=DATE_PARSE_ERROR_MESSAGES["DATE_IN_PAST"])
+        if value > (now + dt.timedelta(days=MAX_FUTURE_DAYS)).date():
+            raise HTTPException(status_code=422, detail=DATE_PARSE_ERROR_MESSAGES["DATE_TOO_FAR"])
         return value
 
     raw = str(value).strip()
 
-    # fast path: already a valid ISO date string
     try:
-        return dt.date.fromisoformat(raw)
+        parsed = dt.date.fromisoformat(raw)
+        if parsed < now.date():
+            raise HTTPException(status_code=422, detail=DATE_PARSE_ERROR_MESSAGES["DATE_IN_PAST"])
+        if parsed > (now + dt.timedelta(days=MAX_FUTURE_DAYS)).date():
+            raise HTTPException(status_code=422, detail=DATE_PARSE_ERROR_MESSAGES["DATE_TOO_FAR"])
+        return parsed
     except ValueError:
         pass
 
-    # natural language path — delegate to resolve_date
     try:
         return resolve_date(raw, now)
     except TimeParseError as e:
@@ -311,32 +321,30 @@ def list_appointments(
         }
     ).sort("start_time", 1)
     results = [appointment_to_response(d) for d in cursor]
-    # Optional: explicit empty response handling (helps debugging)
     if not results:
         return []
     return results
 
 @app.post("/check_doctor_availability/")
 def check_doctor_availability(
-    date: Optional[str] = None,           
-    specialty: Optional[str] = None,
-    speciality: Optional[str] = None,
-    doctor_name: Optional[str] = None,
-    name: Optional[str] = None,
+    req: AvailabilityRequest,          
     db=Depends(get_db),
 ):
-    resolved_date = parse_request_date(date)
+    resolved_date = parse_request_date(req.date)
 
-    logger.info("check_doctor_availability: resolved date = %s (raw input = %r)", resolved_date.isoformat(), date)
+    logger.info(
+        "check_doctor_availability: resolved date = %s (raw input = %r)",
+        resolved_date.isoformat(), req.date
+    )
 
-    if isinstance(speciality, str) and speciality.strip():
-        resolved_specialty = speciality.strip()
-    elif isinstance(specialty, str) and specialty.strip():
-        resolved_specialty = specialty.strip()
+    if isinstance(req.speciality, str) and req.speciality.strip():
+        resolved_specialty = req.speciality.strip()
+    elif isinstance(req.specialty, str) and req.specialty.strip():
+        resolved_specialty = req.specialty.strip()
     else:
         resolved_specialty = None
 
-    resolved_name = doctor_name or name
+    resolved_name = req.doctor_name or req.name
 
     query = {"available": True}
 
