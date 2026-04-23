@@ -307,7 +307,7 @@ def check_doctor_availability(
 ):
     resolved_date = parse_request_date(date)
 
-    resolved_specialty = specialty or speciality
+    resolved_specialty = specialty.strip() if isinstance(specialty, str) and specialty.strip() else None
     resolved_name = doctor_name or name
 
     query = {"available": True}
